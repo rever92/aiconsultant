@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AuthProvider } from "@/components/AuthProvider";
 
 export const metadata: Metadata = {
   title: "AI Consultant - Herramienta de Consultoría",
@@ -14,7 +15,9 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body>
+        <AuthProvider>
         {children}
+        </AuthProvider>
       </body>
     </html>
   );

@@ -1,1 +1,7 @@
-Todo aquello que implique alguna modificación en la base de datos de Supabase, dame el código para que pueda ejecutarlo y mantén un documento llamado supabase.md con toda la documentación de la bbdd siempre actualizada con cada cambio que hagamos. 
+Todo aquello que implique alguna modificación en la base de datos de Supabase, dame el código SQL para que pueda ejecutarlo y mantén un documento llamado supabase.md con toda la documentación de la bbdd siempre actualizada con cada cambio que hagamos. 
+es importante que todos los scripts que tenga que ejecutar los metas siempre como añadidos o modificaciones/actualizaciones de supabase.ms, no en archivos separados, ya que así no mantenemos una documentación actualizada de la bbdd
+Además, es importante que antes de proponerme cambios en la bbdd o nuevas adiciones, revises antes supabase.md para asegurarte de que no exista ya lo que me indicas, y si existe, debes poner una actualización y un script de actualización, evitando redundancias.
+
+Busca siempre una solución sólida a los problemas, nada de chapuzas para que funcione en versión local, piensa siempre en que la aplicación tendrá que ir a un VPS dentro de poco.
+
+Piensa MUY BIEN cada paso que des para asegurarte de no romper ninguna funcionalidad existente.

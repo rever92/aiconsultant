@@ -1,5 +1,10 @@
 # Aplicación de Consultoría con IA - Documentación Técnica
 
+Pass de la bbdd: ContraseñaSeguraparalabbdd2
+Conversación sobre el prompt de consultoría: https://claude.ai/chat/a3048d1b-61a0-4d37-8e31-08f6ea13eeb5
+Prompt de transcripción a notas: https://claude.ai/chat/8ba303db-a005-4ea4-bc7c-4ee7a646e6c2
+
+
 ## 1. Visión General del Proyecto
 
 ### Objetivo

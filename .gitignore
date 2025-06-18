@@ -37,4 +37,7 @@ next-env.d.ts
 
 # temp files
 temp/
-tmp/ 
+tmp/ "uploads/" 
+
+
+uploads/
