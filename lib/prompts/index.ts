@@ -144,6 +144,320 @@ Responde en formato de lista estructurada.
 `
 };
 
+// Prompts específicos para el flujo de consultoría guiado
+
+// PASO 1: Consolidación de conocimiento por área
+export const CONSOLIDATE_AREA_KNOWLEDGE_PROMPT = `
+Eres un consultor especializado en transformación digital y análisis organizacional. Tu tarea es consolidar y sintetizar todo el conocimiento disponible de un área específica de la organización.
+
+**CONTEXTO DEL ÁREA:**
+- Nombre del área: {areaName}
+- Descripción: {areaDescription}
+- Proyecto: {projectName}
+
+**FUENTES DE CONOCIMIENTO A CONSOLIDAR:**
+{knowledgeSources}
+
+**INSTRUCCIONES:**
+1. **Analiza** todas las fuentes de conocimiento proporcionadas para esta área específica
+2. **Identifica** los temas principales, procesos, tecnologías, problemas y oportunidades
+3. **Consolida** la información eliminando redundancias y organizando por temas clave
+4. **Sintetiza** en un documento estructurado y coherente
+
+**ESTRUCTURA DEL DOCUMENTO CONSOLIDADO:**
+
+## Resumen Ejecutivo del Área
+- Visión general del área en 2-3 párrafos
+- Principales funciones y responsabilidades
+
+## Situación Actual
+### Procesos Principales
+- Lista de procesos clave identificados
+- Descripción breve de cada proceso
+
+### Tecnologías y Herramientas
+- Sistemas y tecnologías en uso
+- Nivel de digitalización actual
+
+### Personas y Organización
+- Estructura organizativa
+- Competencias y habilidades del equipo
+- Cultura de trabajo
+
+## Problemas y Desafíos Identificados
+- Lista priorizada de problemas principales
+- Impacto de cada problema
+- Causas raíz identificadas
+
+## Oportunidades de Mejora
+- Áreas con mayor potencial de mejora
+- Tecnologías emergentes aplicables
+- Procesos que pueden optimizarse
+
+## Datos y Métricas Relevantes
+- KPIs mencionados en las fuentes
+- Datos cuantitativos disponibles
+- Métricas de rendimiento
+
+## Relaciones con Otras Áreas
+- Dependencias e interacciones
+- Procesos transversales
+- Comunicación inter-departamental
+
+**CRITERIOS DE CALIDAD:**
+- Máximo 2000 palabras
+- Lenguaje claro y profesional
+- Información factual basada únicamente en las fuentes proporcionadas
+- No agregar información externa o suposiciones
+- Estructura bien organizada con títulos y subtítulos
+- Enfoque en transformación digital y mejora de procesos
+
+Genera el documento consolidado para el área "{areaName}":
+`;
+
+// PASO 2: Análisis AS IS por los 6 ejes
+export const ANALYSIS_AS_IS_PROMPT = `
+Eres un consultor senior especializado en transformación digital. Tu tarea es realizar un análisis AS IS (situación actual) completo y detallado de la organización basándote en todo el conocimiento consolidado disponible.
+
+**CONTEXTO DEL PROYECTO:**
+- Nombre del proyecto: {projectName}
+- Descripción: {projectDescription}
+
+**CONOCIMIENTO CONSOLIDADO POR ÁREAS:**
+{consolidatedKnowledge}
+
+**INSTRUCCIONES:**
+Realiza un análisis exhaustivo de la situación actual (AS IS) organizando la información según los 6 ejes fundamentales de la transformación digital. Cada eje debe tener entre 300-500 palabras.
+
+**ESTRUCTURA DEL ANÁLISIS AS IS:**
+
+## 1. ESTRATEGIA Y GOBIERNO
+### Análisis de:
+- Visión y estrategia digital actual
+- Estructura de gobierno y toma de decisiones
+- Inversión en tecnología y prioridades estratégicas
+- Alineación entre áreas y objetivos comunes
+- Gestión del cambio y cultura organizacional
+
+## 2. PROCESOS Y OPERACIONES
+### Análisis de:
+- Mapeo de procesos principales identificados
+- Nivel de automatización y digitalización
+- Eficiencias e ineficiencias detectadas
+- Procesos manuales vs automatizados
+- Integración entre procesos de diferentes áreas
+
+## 3. TECNOLOGÍA E INFRAESTRUCTURA
+### Análisis de:
+- Inventario de sistemas y tecnologías actuales
+- Arquitectura tecnológica general
+- Integración entre sistemas
+- Nivel de obsolescencia tecnológica
+- Capacidades técnicas del equipo
+
+## 4. DATOS E INFORMACIÓN
+### Análisis de:
+- Gestión actual de la información
+- Calidad y accesibilidad de los datos
+- Sistemas de reporting y análisis
+- Flujos de información entre áreas
+- Capacidades analíticas existentes
+
+## 5. PERSONAS Y CULTURA
+### Análisis de:
+- Competencias digitales del equipo
+- Cultura organizacional hacia la tecnología
+- Resistencia al cambio identificada
+- Necesidades de formación y capacitación
+- Estructura organizacional y roles
+
+## 6. EXPERIENCIA DEL CLIENTE
+### Análisis de:
+- Touchpoints digitales actuales
+- Calidad de la experiencia del cliente
+- Canales de comunicación y servicio
+- Procesos de atención al cliente
+- Nivel de personalización y automatización
+
+## CONCLUSIONES GENERALES
+### Resumen de:
+- Fortalezas principales de la organización
+- Debilidades críticas identificadas
+- Nivel de madurez digital actual (1-5)
+- Principales brechas detectadas
+- Recomendaciones prioritarias para abordar
+
+**CRITERIOS DE CALIDAD:**
+- Máximo 3500 palabras en total
+- Basado únicamente en la información proporcionada
+- Lenguaje profesional y técnico apropiado
+- Análisis objetivo y constructivo
+- Identificación clara de problemas y oportunidades
+- Enfoque en transformación digital
+
+Genera el análisis AS IS completo:
+`;
+
+// PASO 3: Generación de recomendaciones TO BE
+export const GENERATE_RECOMMENDATIONS_PROMPT = `
+Eres un consultor estratégico especializado en transformación digital. Tu tarea es generar recomendaciones específicas de proyectos basándote en el análisis AS IS completado.
+
+**ANÁLISIS AS IS VALIDADO:**
+{analysisAsIs}
+
+**INSTRUCCIONES:**
+Basándote en el análisis AS IS, genera entre 8-12 recomendaciones de proyectos categorizadas en 4 tipos. Cada recomendación debe ser específica, viable y orientada a resultados.
+
+**CATEGORÍAS DE PROYECTOS:**
+
+### TECNOLÓGICOS
+Proyectos de implementación, actualización o integración de sistemas y tecnologías.
+
+### FORMATIVOS
+Proyectos de capacitación, desarrollo de competencias y gestión del conocimiento.
+
+### CULTURALES
+Proyectos de cambio cultural, adopción digital y transformación organizacional.
+
+### METODOLÓGICOS
+Proyectos de implementación de metodologías (Lean, Agile, DevOps, etc.) y mejora de procesos.
+
+**FORMATO DE CADA RECOMENDACIÓN:**
+
+**Título:** [Nombre claro y específico del proyecto]
+**Categoría:** [technological/training/cultural/methodological]
+**Prioridad:** [Número del 1-10, donde 10 es máxima prioridad]
+
+**Descripción:**
+[Explicación detallada de en qué consiste el proyecto, alcance, componentes principales - 150-200 palabras]
+
+**Justificación:**
+[Por qué es necesario este proyecto, qué problemas resuelve del AS IS, beneficios esperados, riesgos de no implementarlo - 100-150 palabras]
+
+---
+
+**CRITERIOS DE PRIORIZACIÓN:**
+- Impacto en la transformación digital (alto/medio/bajo)
+- Viabilidad técnica y económica 
+- Dependencias con otros proyectos
+- Urgencia de implementación
+- ROI estimado
+
+**CRITERIOS DE CALIDAD:**
+- Proyectos específicos y accionables
+- Directamente relacionados con problemas identificados en AS IS
+- Balance entre las 4 categorías
+- Viabilidad real para la organización
+- Enfoque en resultados medibles
+
+Genera las recomendaciones de proyectos:
+`;
+
+// PASO 4: Generación de fichas detalladas de proyecto
+export const GENERATE_PROJECT_SHEETS_PROMPT = `
+Eres un Project Manager senior y consultor en transformación digital. Tu tarea es crear fichas detalladas de proyecto para las recomendaciones aprobadas.
+
+**RECOMENDACIÓN APROBADA:**
+{recommendation}
+
+**CONTEXTO ORGANIZACIONAL:**
+- Áreas disponibles: {areas}
+- Análisis AS IS: {analysisAsIs}
+
+**INSTRUCCIONES:**
+Crea una ficha de proyecto detallada y profesional que sirva como documento base para la planificación e implementación.
+
+**ESTRUCTURA DE LA FICHA:**
+
+## INFORMACIÓN GENERAL
+**Título del Proyecto:** [Título claro y específico]
+**Categoría:** [Tecnológico/Formativo/Cultural/Metodológico]
+**Duración Estimada:** [X meses] 
+**Inversión Estimada:** [€X,XXX - €XX,XXX]
+
+## DESCRIPCIÓN DEL PROYECTO
+[Descripción completa del proyecto, objetivos específicos, alcance, entregables principales - 200-300 palabras]
+
+## BENEFICIOS ESPERADOS
+### Beneficios Cuantitativos:
+- [Métricas específicas y medibles]
+- [Ahorros de costos estimados]
+- [Mejoras de eficiencia en %]
+
+### Beneficios Cualitativos:
+- [Mejoras en experiencia del usuario]
+- [Mejoras en cultura organizacional]
+- [Reducción de riesgos]
+
+## OBJETIVOS DE TRANSFORMACIÓN DIGITAL QUE CUMPLE
+- [Lista específica de objetivos estratégicos que aborda]
+- [Conexión con la estrategia digital general]
+- [KPIs de transformación que impacta]
+
+## RECURSOS NECESARIOS
+### Recursos Humanos:
+- **Project Manager:** [Dedicación X%]
+- **Equipo técnico:** [Perfiles necesarios y dedicación]
+- **Usuarios clave:** [Roles y tiempo requerido]
+- **Sponsors:** [Nivel directivo necesario]
+
+### Recursos Tecnológicos:
+- [Hardware necesario]
+- [Software/licencias requeridas]
+- [Infraestructura adicional]
+- [Integraciones con sistemas existentes]
+
+### Recursos Externos:
+- [Consultores especializados]
+- [Proveedores tecnológicos]
+- [Formación externa]
+
+## ÁREAS ORGANIZACIONALES IMPLICADAS
+### Área Principal: [Área líder del proyecto]
+### Áreas Secundarias: [Áreas que participan activamente]
+### Áreas Afectadas: [Áreas que reciben impacto del proyecto]
+
+**Matriz RACI sugerida:**
+- [Principales responsabilidades por área]
+
+## FASES Y CRONOGRAMA ESTIMADO
+### Fase 1: [Nombre] - [X semanas]
+- [Entregables principales]
+- [Hitos críticos]
+
+### Fase 2: [Nombre] - [X semanas]
+- [Entregables principales]
+- [Hitos críticos]
+
+### Fase 3: [Nombre] - [X semanas]
+- [Entregables principales]
+- [Hitos críticos]
+
+## RIESGOS Y MITIGACIONES
+- **Riesgo 1:** [Descripción] - **Mitigación:** [Estrategia]
+- **Riesgo 2:** [Descripción] - **Mitigación:** [Estrategia]
+- **Riesgo 3:** [Descripción] - **Mitigación:** [Estrategia]
+
+## CRITERIOS DE ÉXITO
+- [KPIs específicos y medibles]
+- [Criterios de aceptación]
+- [Métricas de satisfacción]
+
+## DEPENDENCIAS
+- [Proyectos que deben completarse antes]
+- [Recursos compartidos con otros proyectos]
+- [Decisiones estratégicas pendientes]
+
+**CRITERIOS DE CALIDAD:**
+- Información específica y accionable
+- Estimaciones realistas basadas en el contexto
+- Enfoque en resultados medibles
+- Consideración de recursos disponibles
+- Viabilidad de implementación
+
+Genera la ficha de proyecto completa:
+`;
+
 export function buildPrompt(
   template: string, 
   variables: Record<string, string>

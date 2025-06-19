@@ -1,107 +1,117 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/supabase/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
-import { unlink } from 'fs/promises';
-import { existsSync } from 'fs';
 import path from 'path';
+import fs from 'fs/promises';
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    console.log('Iniciando eliminación de conocimiento:', params.id);
+    const knowledgeId = params.id;
+    console.log('Iniciando eliminación de conocimiento:', knowledgeId);
 
-    const supabase = createServerSupabaseClient();
-    
     // Verificar autenticación
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      console.error('Error de autenticación:', authError);
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    const authResult = await requireAuth(request);
+    if (authResult.error || !authResult.user) {
+      console.error('Error de autenticación:', authResult.error);
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
 
-    // Obtener información del conocimiento antes de eliminarlo
-    const { data: knowledge, error: fetchError } = await supabase
+    const user = authResult.user;
+    const supabase = createServerSupabaseClient();
+
+    // Obtener el conocimiento para verificar permisos del proyecto
+    const { data: knowledge, error: knowledgeError } = await supabase
       .from('knowledge')
-      .select('*')
-      .eq('id', params.id)
+      .select(`
+        *,
+        projects!inner (
+          id,
+          user_id,
+          name
+        )
+      `)
+      .eq('id', knowledgeId)
       .single();
 
-    if (fetchError) {
-      console.error('Error obteniendo conocimiento:', fetchError);
+    if (knowledgeError || !knowledge) {
+      console.error('Conocimiento no encontrado:', knowledgeError);
       return NextResponse.json({ error: 'Conocimiento no encontrado' }, { status: 404 });
     }
 
-    console.log('Conocimiento encontrado:', knowledge);
+    const project = knowledge.projects;
 
-    // Eliminar asignaciones de áreas primero (por la foreign key)
+    // Verificar permisos: 
+    // 1. Es admin
+    // 2. Es dueño del proyecto
+    // 3. Tiene permisos de edición en el proyecto
+    const isAdmin = user.profile?.role === 'admin';
+    const isOwner = project.user_id === user.id;
+
+    let hasEditPermission = false;
+    if (!isAdmin && !isOwner) {
+      const { data: permissions } = await supabase
+        .from('project_permissions')
+        .select('permission_type')
+        .eq('project_id', project.id)
+        .eq('user_id', user.id)
+        .in('permission_type', ['edit', 'admin'])
+        .maybeSingle();
+
+      hasEditPermission = !!permissions;
+    }
+
+    if (!isAdmin && !isOwner && !hasEditPermission) {
+      return NextResponse.json(
+        { error: 'No tienes permisos para eliminar este conocimiento' },
+        { status: 403 }
+      );
+    }
+
+    // Eliminar asignaciones de áreas primero
     const { error: areasError } = await supabase
       .from('knowledge_areas')
       .delete()
-      .eq('knowledge_id', params.id);
+      .eq('knowledge_id', knowledgeId);
 
     if (areasError) {
       console.error('Error eliminando asignaciones de áreas:', areasError);
-      return NextResponse.json({ error: 'Error eliminando asignaciones de áreas' }, { status: 500 });
+      return NextResponse.json({ error: 'Error eliminando asignaciones' }, { status: 500 });
     }
 
-    console.log('Asignaciones de áreas eliminadas');
+    // Si tiene archivo, eliminarlo del sistema de archivos
+    if (knowledge.file_name) {
+      try {
+        const filePath = path.join(process.cwd(), 'uploads', 'knowledge', project.id, knowledge.file_name);
+        await fs.unlink(filePath);
+        console.log('Archivo eliminado:', filePath);
+      } catch (fileError) {
+        console.warn('Advertencia: No se pudo eliminar el archivo:', fileError);
+        // No fallar la operación si el archivo no se puede eliminar
+      }
+    }
 
-    // Eliminar el conocimiento de la base de datos
+    // Eliminar el registro de conocimiento
     const { error: deleteError } = await supabase
       .from('knowledge')
       .delete()
-      .eq('id', params.id);
+      .eq('id', knowledgeId);
 
     if (deleteError) {
       console.error('Error eliminando conocimiento:', deleteError);
       return NextResponse.json({ error: 'Error eliminando conocimiento' }, { status: 500 });
     }
 
-    console.log('Conocimiento eliminado de la base de datos');
-
-    // Si es un archivo subido, intentar eliminarlo del sistema de archivos
-    if (knowledge.source_type === 'upload' && knowledge.file_name) {
-      try {
-        // Construir la ruta del archivo temporal
-        // Nota: En producción, esto debería usar un storage como S3, pero para desarrollo local usamos archivos temporales
-        const tempDir = path.join(process.cwd(), 'temp');
-        const possiblePaths = [
-          path.join(tempDir, knowledge.file_name),
-          path.join(tempDir, `${knowledge.id}_${knowledge.file_name}`),
-          path.join(tempDir, `knowledge_${knowledge.id}.txt`),
-          path.join(tempDir, `knowledge_${knowledge.id}.docx`)
-        ];
-
-        let fileDeleted = false;
-        for (const filePath of possiblePaths) {
-          if (existsSync(filePath)) {
-            await unlink(filePath);
-            console.log('Archivo eliminado:', filePath);
-            fileDeleted = true;
-            break;
-          }
-        }
-
-        if (!fileDeleted) {
-          console.log('No se encontró archivo físico para eliminar (puede ser normal si ya expiró)');
-        }
-      } catch (fileError) {
-        console.error('Error eliminando archivo físico:', fileError);
-        // No fallar la operación completa por esto, ya que el archivo puede no existir
-      }
-    }
-
+    console.log('Conocimiento eliminado exitosamente:', knowledgeId);
     return NextResponse.json({ 
       message: 'Conocimiento eliminado exitosamente',
-      id: params.id 
+      id: knowledgeId
     });
 
   } catch (error) {
-    console.error('Error en eliminación de conocimiento:', error);
-    return NextResponse.json(
-      { error: 'Error interno del servidor' },
-      { status: 500 }
-    );
+    console.error('Error en DELETE /api/knowledge/[id]:', error);
+    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 });
   }
 } 

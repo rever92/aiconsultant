@@ -648,6 +648,40 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Flujo Principal de Consultoría */}
+        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg shadow-lg p-6 mb-8 text-white">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div className="bg-white bg-opacity-20 rounded-full p-3">
+                <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold mb-2">🎯 Proceso de Consultoría Guiado</h2>
+                <p className="text-blue-100 text-lg">
+                  Metodología estructurada en 4 pasos con IA integrada
+                </p>
+                <div className="mt-3 flex items-center space-x-6 text-sm text-blue-100">
+                  <span>📚 Base de Conocimiento</span>
+                  <span>📊 Análisis AS IS (6 ejes)</span>
+                  <span>💡 Recomendaciones TO BE</span>
+                  <span>📋 Fichas TO DO</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col space-y-3">
+              <Link 
+                href={`/projects/${projectId}/guided`}
+                className="bg-white text-blue-600 hover:bg-blue-50 px-8 py-4 rounded-lg font-bold text-lg text-center transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                🚀 Iniciar Proceso
+              </Link>
+              <span className="text-blue-200 text-xs text-center font-medium">Método principal recomendado</span>
+            </div>
+          </div>
+        </div>
+
         {/* Project Header */}
         <div className="bg-white rounded-lg shadow-lg p-6 mb-8">
           <div className="flex justify-between items-start">
@@ -669,6 +703,24 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">
                 {knowledge.length} {knowledge.length === 1 ? 'conocimiento' : 'conocimientos'}
               </span>
+            </div>
+          </div>
+          
+          {/* Modo Legado */}
+          <div className="mt-6 pt-4 border-t border-gray-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-medium text-gray-700 mb-1">Modo de Gestión Legado</h3>
+                <p className="text-gray-500 text-sm">
+                  Gestión manual de áreas y conocimiento. Se mantiene para compatibilidad con proyectos existentes.
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-xs font-medium mb-1">
+                  Modo Legado
+                </div>
+                <p className="text-xs text-gray-500">Para expertos</p>
+              </div>
             </div>
           </div>
         </div>

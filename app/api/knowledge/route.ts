@@ -1,37 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
 import path from 'path';
+import fs from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import mammoth from 'mammoth';
-import { createClient } from '@supabase/supabase-js';
-
-// Cliente de Supabase
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { requireAuth, createServerSupabaseClient } from '@/lib/supabase/server';
+import { validateFileType, validateFileSize } from '@/lib/file-utils/extractors';
 
 // Helper function to save knowledge file
 async function saveKnowledgeFile(file: File, projectId: string) {
   try {
-    const uploadsDir = path.join(process.cwd(), 'uploads', 'knowledge');
-    
-    // Ensure uploads directory exists
-    await fs.mkdir(uploadsDir, { recursive: true });
-    
-    const fileId = uuidv4();
-    const extension = file.name.split('.').pop();
-    const fileName = `${projectId}_${fileId}.${extension}`;
-    const filePath = path.join(uploadsDir, fileName);
-    
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    
+    await fs.mkdir('uploads/knowledge', { recursive: true });
+    await fs.mkdir(`uploads/knowledge/${projectId}`, { recursive: true });
+
+    const fileExtension = path.extname(file.name);
+    const fileName = `${uuidv4()}${fileExtension}`;
+    const filePath = path.join(process.cwd(), 'uploads', 'knowledge', projectId, fileName);
+
+    const buffer = Buffer.from(await file.arrayBuffer());
     await fs.writeFile(filePath, buffer);
-    
+
     return {
-      filePath: `uploads/knowledge/${fileName}`,
-      fileName: file.name
+      filePath,
+      fileName,
+      fileId: fileName.replace(fileExtension, '')
     };
   } catch (error) {
     console.error('Error saving file:', error);
@@ -40,25 +31,20 @@ async function saveKnowledgeFile(file: File, projectId: string) {
 }
 
 // Helper function to extract text content
-async function extractTextContent(file: File): Promise<string> {
+async function extractTextContent(buffer: Buffer, fileName: string): Promise<string> {
   try {
-    const extension = file.name.split('.').pop()?.toLowerCase();
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    
-    if (extension === 'txt') {
+    const fileExtension = path.extname(fileName).toLowerCase();
+
+    if (fileExtension === '.txt') {
       return buffer.toString('utf-8');
-    } else if (extension === 'docx') {
+    } else if (fileExtension === '.docx') {
       const result = await mammoth.extractRawText({ buffer });
       return result.value;
+    } else {
+      throw new Error(`Tipo de archivo no soportado: ${fileExtension}`);
     }
-    
-    throw new Error('Solo se soportan archivos .txt y .docx');
   } catch (error) {
-    console.error('Error extracting content:', error);
-    if (error instanceof Error) {
-      throw new Error(`Error extrayendo contenido: ${error.message}`);
-    }
+    console.error('Error extracting text:', error);
     throw new Error('Error extrayendo contenido del archivo');
   }
 }
@@ -66,26 +52,68 @@ async function extractTextContent(file: File): Promise<string> {
 // GET /api/knowledge - Get knowledge for a project
 export async function GET(request: NextRequest) {
   try {
-    const url = new URL(request.url);
-    const projectId = url.searchParams.get('projectId');
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get('projectId');
 
     if (!projectId) {
-      return NextResponse.json(
-        { error: 'projectId es requerido' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'projectId es requerido' }, { status: 400 });
     }
 
-    console.log('Fetching knowledge for project:', projectId);
+    // Verificar autenticación
+    const authResult = await requireAuth(request);
+    if (authResult.error || !authResult.user) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    const user = authResult.user;
+    const supabase = createServerSupabaseClient();
+
+    // Verificar permisos del proyecto
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('id, user_id, name')
+      .eq('id', projectId)
+      .single();
+
+    if (projectError || !project) {
+      return NextResponse.json({ error: 'Proyecto no encontrado' }, { status: 404 });
+    }
+
+    // Verificar permisos: admin, dueño o con permisos
+    const isAdmin = user.profile?.role === 'admin';
+    const isOwner = project.user_id === user.id;
+
+    let hasPermission = false;
+    if (!isAdmin && !isOwner) {
+      const { data: permissions } = await supabase
+        .from('project_permissions')
+        .select('permission_type')
+        .eq('project_id', projectId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      hasPermission = !!permissions;
+    }
+
+    if (!isAdmin && !isOwner && !hasPermission) {
+      return NextResponse.json(
+        { error: 'No tienes permisos para ver este proyecto' },
+        { status: 403 }
+      );
+    }
 
     // Obtener conocimiento del proyecto con áreas asignadas
     const { data: knowledge, error } = await supabase
       .from('knowledge')
       .select(`
         *,
-        knowledge_areas(
+        knowledge_areas (
           area_id,
-          areas(id, name, color)
+          areas (
+            id,
+            name,
+            color
+          )
         )
       `)
       .eq('project_id', projectId)
@@ -96,28 +124,128 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    console.log('Knowledge fetched successfully:', knowledge?.length || 0);
     return NextResponse.json(knowledge || []);
   } catch (error) {
-    console.error('Error getting knowledge:', error);
-    return NextResponse.json(
-      { error: 'Error obteniendo conocimiento' },
-      { status: 500 }
-    );
+    console.error('Error en GET /api/knowledge:', error);
+    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 });
   }
 }
 
 // POST /api/knowledge - Create new knowledge (file upload or manual)
 export async function POST(request: NextRequest) {
   try {
-    console.log('POST /api/knowledge - Iniciando procesamiento...');
-    
-    const contentType = request.headers.get('content-type');
-    
-    if (contentType?.includes('application/json')) {
-      // Conocimiento manual (texto pegado)
+    console.log('Iniciando POST a /api/knowledge');
+
+    // Verificar autenticación
+    const authResult = await requireAuth(request);
+    if (authResult.error || !authResult.user) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    const user = authResult.user;
+    const supabase = createServerSupabaseClient();
+
+    // Determinar si es FormData (archivo) o JSON (manual)
+    const contentType = request.headers.get('content-type') || '';
+    const isFormData = contentType.includes('multipart/form-data');
+
+    if (isFormData) {
+      // Manejo de subida de archivo
+      const formData = await request.formData();
+      const file = formData.get('file') as File;
+      const projectId = formData.get('projectId') as string;
+      const title = formData.get('title') as string;
+
+      if (!file || !projectId) {
+        return NextResponse.json({ error: 'File y projectId son requeridos' }, { status: 400 });
+      }
+
+      // Verificar permisos del proyecto
+      const { data: project, error: projectError } = await supabase
+        .from('projects')
+        .select('id, user_id, name')
+        .eq('id', projectId)
+        .single();
+
+      if (projectError || !project) {
+        return NextResponse.json({ error: 'Proyecto no encontrado' }, { status: 404 });
+      }
+
+      // Verificar permisos de edición
+      const isAdmin = user.profile?.role === 'admin';
+      const isOwner = project.user_id === user.id;
+
+      let hasEditPermission = false;
+      if (!isAdmin && !isOwner) {
+        const { data: permissions } = await supabase
+          .from('project_permissions')
+          .select('permission_type')
+          .eq('project_id', projectId)
+          .eq('user_id', user.id)
+          .in('permission_type', ['edit', 'admin'])
+          .maybeSingle();
+
+        hasEditPermission = !!permissions;
+      }
+
+      if (!isAdmin && !isOwner && !hasEditPermission) {
+        return NextResponse.json(
+          { error: 'No tienes permisos para añadir conocimiento a este proyecto' },
+          { status: 403 }
+        );
+      }
+
+      // Validar archivo
+      const validationResult = validateFileType(file);
+      if (!validationResult.isValid) {
+        return NextResponse.json({ error: validationResult.error }, { status: 400 });
+      }
+
+      const sizeValidation = validateFileSize(file, 10);
+      if (!sizeValidation.isValid) {
+        return NextResponse.json({ error: sizeValidation.error }, { status: 400 });
+      }
+
+      // Guardar archivo y extraer contenido
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const content = await extractTextContent(buffer, file.name);
+
+      if (!content || content.trim().length === 0) {
+        return NextResponse.json(
+          { error: 'No se pudo extraer contenido del archivo' },
+          { status: 400 }
+        );
+      }
+
+      // Guardar archivo físico
+      const savedFile = await saveKnowledgeFile(file, projectId);
+
+      // Crear registro en la base de datos
+      const { data: knowledge, error: insertError } = await supabase
+        .from('knowledge')
+        .insert({
+          project_id: projectId,
+          title: title || file.name,
+          file_name: savedFile.fileName,
+          file_size: file.size,
+          content: content.trim(),
+          source_type: 'upload'
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('Error insertando conocimiento:', insertError);
+        return NextResponse.json({ error: 'Error guardando conocimiento' }, { status: 500 });
+      }
+
+      console.log('Conocimiento creado exitosamente:', knowledge.id);
+      return NextResponse.json(knowledge);
+
+    } else {
+      // Manejo de conocimiento manual
       const body = await request.json();
-      const { title, content, projectId, notes, areaId } = body;
+      const { title, content, notes, projectId, areaId } = body;
 
       if (!title || !content || !projectId) {
         return NextResponse.json(
@@ -126,27 +254,59 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      console.log('Creating manual knowledge:', title, 'for project:', projectId);
+      // Verificar permisos del proyecto (mismo código que arriba)
+      const { data: project, error: projectError } = await supabase
+        .from('projects')
+        .select('id, user_id, name')
+        .eq('id', projectId)
+        .single();
 
-      // Guardar conocimiento manual en base de datos
-      const { data: knowledge, error: dbError } = await supabase
+      if (projectError || !project) {
+        return NextResponse.json({ error: 'Proyecto no encontrado' }, { status: 404 });
+      }
+
+      const isAdmin = user.profile?.role === 'admin';
+      const isOwner = project.user_id === user.id;
+
+      let hasEditPermission = false;
+      if (!isAdmin && !isOwner) {
+        const { data: permissions } = await supabase
+          .from('project_permissions')
+          .select('permission_type')
+          .eq('project_id', projectId)
+          .eq('user_id', user.id)
+          .in('permission_type', ['edit', 'admin'])
+          .maybeSingle();
+
+        hasEditPermission = !!permissions;
+      }
+
+      if (!isAdmin && !isOwner && !hasEditPermission) {
+        return NextResponse.json(
+          { error: 'No tienes permisos para añadir conocimiento a este proyecto' },
+          { status: 403 }
+        );
+      }
+
+      // Crear conocimiento manual
+      const { data: knowledge, error: insertError } = await supabase
         .from('knowledge')
         .insert({
-          title,
-          content: content.trim(),
-          source_type: 'manual',
-          notes: notes || null,
           project_id: projectId,
+          title: title.trim(),
+          content: content.trim(),
+          notes: notes?.trim() || null,
+          source_type: 'manual'
         })
         .select()
         .single();
 
-      if (dbError) {
-        console.error('Error creating manual knowledge:', dbError);
-        return NextResponse.json({ error: dbError.message }, { status: 500 });
+      if (insertError) {
+        console.error('Error insertando conocimiento manual:', insertError);
+        return NextResponse.json({ error: 'Error guardando conocimiento' }, { status: 500 });
       }
 
-      // Si se especifica un área, asignarla automáticamente
+      // Si se especificó un área, asignarla
       if (areaId) {
         const { error: areaError } = await supabase
           .from('knowledge_areas')
@@ -156,103 +316,16 @@ export async function POST(request: NextRequest) {
           });
 
         if (areaError) {
-          console.warn('Error assigning area to knowledge:', areaError);
+          console.warn('Advertencia: No se pudo asignar área automáticamente:', areaError);
         }
       }
 
-      console.log('Manual knowledge created successfully:', knowledge.id);
-      return NextResponse.json({
-        ...knowledge,
-        knowledge_areas: areaId ? [{ area_id: areaId }] : []
-      });
-
-    } else {
-      // Conocimiento por archivo (FormData)
-      const formData = await request.formData();
-      const file = formData.get('file') as File;
-      const projectId = formData.get('projectId') as string;
-      const title = formData.get('title') as string;
-
-      if (!file || !projectId) {
-        return NextResponse.json(
-          { error: 'Archivo y projectId son requeridos' },
-          { status: 400 }
-        );
-      }
-
-      console.log('Creating file knowledge:', title || file.name, 'for project:', projectId);
-
-      // Validate file type - supporting .txt and .docx
-      const allowedTypes = [
-        'text/plain', 
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      ];
-      
-      const fileExtension = file.name.split('.').pop()?.toLowerCase();
-      const allowedExtensions = ['txt', 'docx'];
-      
-      if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExtension || '')) {
-        console.error('Tipo de archivo no válido:', {
-          fileName: file.name,
-          mimeType: file.type,
-          extension: fileExtension
-        });
-        return NextResponse.json(
-          { error: `Solo se permiten archivos .txt y .docx. Recibido: ${file.type} (${fileExtension})` },
-          { status: 400 }
-        );
-      }
-
-      // Validate file size (max 10MB)
-      const maxSize = 10 * 1024 * 1024; // 10MB
-      if (file.size > maxSize) {
-        return NextResponse.json(
-          { error: 'El archivo es demasiado grande (máximo 10MB)' },
-          { status: 400 }
-        );
-      }
-
-      // Save file and extract content
-      const { filePath, fileName } = await saveKnowledgeFile(file, projectId);
-      const content = await extractTextContent(file);
-
-      if (!content || content.trim().length === 0) {
-        return NextResponse.json(
-          { error: 'El archivo está vacío o no contiene texto extraíble' },
-          { status: 400 }
-        );
-      }
-
-      // Guardar en base de datos
-      const { data: knowledge, error: dbError } = await supabase
-        .from('knowledge')
-        .insert({
-          title: title || file.name,
-          file_name: fileName,
-          file_size: file.size,
-          content,
-          source_type: 'upload',
-          project_id: projectId,
-        })
-        .select()
-        .single();
-
-      if (dbError) {
-        console.error('Error creating file knowledge:', dbError);
-        return NextResponse.json({ error: dbError.message }, { status: 500 });
-      }
-
-      console.log('File knowledge created successfully:', knowledge.id);
-      return NextResponse.json({
-        ...knowledge,
-        knowledge_areas: []
-      });
+      console.log('Conocimiento manual creado exitosamente:', knowledge.id);
+      return NextResponse.json(knowledge);
     }
+
   } catch (error) {
-    console.error('Error creating knowledge:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Error creando conocimiento' },
-      { status: 500 }
-    );
+    console.error('Error en POST /api/knowledge:', error);
+    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 });
   }
 } 
