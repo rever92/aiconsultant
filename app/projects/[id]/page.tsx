@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
-import { authenticatedFetch } from '@/lib/supabase/client';
+import { authenticatedFetchMongo } from '@/lib/supabase/client';
 
 interface Area {
   id: string;
@@ -139,29 +139,51 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     try {
       setLoading(true);
       
-      // Cargar proyecto
-      const projectResponse = await authenticatedFetch(`/api/projects/${projectId}`);
+      // Cargar proyecto desde backend MongoDB
+      const projectResponse = await authenticatedFetchMongo(`/projects/${projectId}`);
       if (!projectResponse.ok) {
         throw new Error('Project not found');
       }
       const projectData = await projectResponse.json();
-      setProject(projectData);
+      setProject(projectData.project || projectData);
 
-      // Cargar áreas
-      const areasResponse = await authenticatedFetch(`/api/areas?projectId=${projectId}`);
+      // Cargar áreas desde backend MongoDB
+      const areasResponse = await authenticatedFetchMongo(`/areas?projectId=${projectId}`);
       if (areasResponse.ok) {
         const areasData = await areasResponse.json();
-        setAreas(areasData);
+        const areasFormatted = (areasData.areas || areasData).map((area: any) => ({
+          id: area._id,
+          name: area.name,
+          description: area.description,
+          color: area.color,
+          created_at: area.createdAt
+        }));
+        setAreas(areasFormatted);
       }
 
-      // Cargar conocimiento
-      const knowledgeResponse = await authenticatedFetch(`/api/knowledge?projectId=${projectId}`);
+      // Cargar conocimiento desde backend MongoDB
+      const knowledgeResponse = await authenticatedFetchMongo(`/knowledge?projectId=${projectId}`);
       if (knowledgeResponse.ok) {
         const knowledgeData = await knowledgeResponse.json();
-        // Asegurar que todo el conocimiento tenga knowledge_areas como array
-        const knowledgeWithAreas = knowledgeData.map((k: any) => ({
-          ...k,
-          knowledge_areas: k.knowledge_areas || []
+        const rawKnowledge = knowledgeData.knowledge || knowledgeData;
+        // Mapear datos de MongoDB al formato esperado por el frontend
+        const knowledgeWithAreas = rawKnowledge.map((k: any) => ({
+          id: k._id,
+          title: k.title,
+          content: k.content,
+          source_type: k.sourceType,
+          file_name: k.fileInfo?.originalName,
+          file_size: k.fileInfo?.fileSize,
+          notes: k.notes,
+          uploaded_at: k.createdAt,
+          knowledge_areas: (k.areas || []).map((area: any) => ({
+            area_id: area._id,
+            areas: {
+              id: area._id,
+              name: area.name,
+              color: area.color
+            }
+          }))
         }));
         setKnowledge(knowledgeWithAreas);
       }
@@ -179,12 +201,12 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
     setIsCreating(true);
     try {
-      const response = await authenticatedFetch('/api/areas', {
+      const response = await authenticatedFetchMongo('/areas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...newArea,
-          project_id: projectId
+          projectId: projectId
         }),
       });
 
@@ -192,8 +214,15 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         throw new Error('Error creating area');
       }
 
-      const area = await response.json();
-      setAreas(prev => [...prev, area]);
+      const areaResponse = await response.json();
+      const areaFormatted = {
+        id: areaResponse.area._id,
+        name: areaResponse.area.name,
+        description: areaResponse.area.description,
+        color: areaResponse.area.color,
+        created_at: areaResponse.area.createdAt
+      };
+      setAreas(prev => [...prev, areaFormatted]);
       setNewArea({ name: '', description: '', color: getNextAvailableColor() });
       setShowCreateArea(false);
     } catch (error) {
@@ -214,7 +243,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
       formData.append('projectId', projectId);
       formData.append('title', uploadTitle || selectedFile.name);
 
-      const response = await authenticatedFetch('/api/knowledge', {
+      const response = await authenticatedFetchMongo('/knowledge', {
         method: 'POST',
         body: formData,
       });
@@ -225,12 +254,45 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
       }
 
       const newKnowledge = await response.json();
-      // Asegurar que knowledge_areas existe como array vacío
-      const knowledgeWithAreas = {
-        ...newKnowledge,
-        knowledge_areas: newKnowledge.knowledge_areas || []
+
+      // Si se asignó un área, asignarla
+      if (selectedAreaId) {
+        const assignResponse = await authenticatedFetchMongo(`/knowledge/${newKnowledge.knowledge._id}/assign-areas`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ areaIds: [selectedAreaId] }),
+        });
+
+        if (assignResponse.ok) {
+          // Actualizar el conocimiento con las áreas asignadas
+          const areaData = areas.find(a => a.id === selectedAreaId);
+          if (areaData) {
+            newKnowledge.knowledge.knowledge_areas = [{
+              area_id: selectedAreaId,
+              areas: {
+                id: areaData.id,
+                name: areaData.name,
+                color: areaData.color
+              }
+            }];
+          }
+        }
+      }
+
+      // Mapear la estructura de MongoDB al formato frontend
+      const mappedKnowledge = {
+        id: newKnowledge.knowledge._id,
+        title: newKnowledge.knowledge.title,
+        content: newKnowledge.knowledge.content,
+        source_type: newKnowledge.knowledge.sourceType,
+        file_name: newKnowledge.knowledge.fileInfo?.originalName,
+        file_size: newKnowledge.knowledge.fileInfo?.fileSize,
+        notes: newKnowledge.knowledge.notes,
+        uploaded_at: newKnowledge.knowledge.createdAt,
+        knowledge_areas: newKnowledge.knowledge.knowledge_areas || []
       };
-      setKnowledge(prev => [knowledgeWithAreas, ...prev]);
+      
+      setKnowledge(prev => [mappedKnowledge, ...prev]);
       setSelectedFile(null);
       setUploadTitle('');
       setShowUploadKnowledge(false);
@@ -248,7 +310,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
     setIsAdding(true);
     try {
-      const response = await authenticatedFetch('/api/knowledge', {
+      const response = await authenticatedFetchMongo('/knowledge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -265,13 +327,24 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         throw new Error(error.error || 'Error adding knowledge');
       }
 
-      const newKnowledge = await response.json();
-      // Asegurar que knowledge_areas existe
-      const knowledgeWithAreas = {
-        ...newKnowledge,
-        knowledge_areas: newKnowledge.knowledge_areas || []
+      const knowledgeResponse = await response.json();
+      const knowledgeFormatted = {
+        id: knowledgeResponse.knowledge._id,
+        title: knowledgeResponse.knowledge.title,
+        content: knowledgeResponse.knowledge.content,
+        source_type: knowledgeResponse.knowledge.sourceType,
+        notes: knowledgeResponse.knowledge.notes,
+        uploaded_at: knowledgeResponse.knowledge.createdAt,
+        knowledge_areas: (knowledgeResponse.knowledge.areas || []).map((area: any) => ({
+          area_id: area._id,
+          areas: {
+            id: area._id,
+            name: area.name,
+            color: area.color
+          }
+        }))
       };
-      setKnowledge(prev => [knowledgeWithAreas, ...prev]);
+      setKnowledge(prev => [knowledgeFormatted, ...prev]);
       setManualTitle('');
       setManualContent('');
       setManualNotes('');
@@ -290,7 +363,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     if (!confirm('¿Estás seguro de eliminar esta área?')) return;
 
     try {
-      const response = await authenticatedFetch(`/api/areas/${areaId}`, {
+      const response = await authenticatedFetchMongo(`/areas/${areaId}`, {
         method: 'DELETE',
       });
 
@@ -318,7 +391,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
     setIsAssigning(true);
     try {
-      const response = await authenticatedFetch(`/api/knowledge/${selectedKnowledge.id}/assign-areas`, {
+      const response = await authenticatedFetchMongo(`/knowledge/${selectedKnowledge.id}/assign-areas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -370,7 +443,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     if (!confirmDelete) return;
 
     try {
-      const response = await authenticatedFetch(`/api/knowledge/${knowledge.id}`, {
+      const response = await authenticatedFetchMongo(`/knowledge/${knowledge.id}`, {
         method: 'DELETE',
       });
 
@@ -407,7 +480,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     if (!confirmDelete) return;
 
     try {
-      const response = await authenticatedFetch(`/api/knowledge/delete-all?projectId=${projectId}`, {
+      const response = await authenticatedFetchMongo(`/knowledge/delete-all?projectId=${projectId}`, {
         method: 'DELETE',
       });
 
@@ -449,12 +522,22 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     
     const files = Array.from(e.dataTransfer.files).filter(file => 
       file.type === 'text/plain' || 
-      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      file.type === 'application/pdf'
     );
 
     if (files.length === 0) {
-      alert('Por favor, arrastra solo archivos .txt o .docx');
+      alert('Por favor, arrastra solo archivos .txt, .docx o .pdf');
       return;
+    }
+
+    // Verificar tamaño de archivos (advertir si son > 5MB)
+    const largeFiles = files.filter(file => file.size > 5 * 1024 * 1024);
+    if (largeFiles.length > 0) {
+      const fileNames = largeFiles.map(f => f.name).join(', ');
+      if (!confirm(`Los siguientes archivos son muy grandes (>${5} MB):\n\n${fileNames}\n\nLa subida puede tardar más tiempo. ¿Continuar?`)) {
+        return;
+      }
     }
 
     const newFiles = files.map(file => ({
@@ -473,12 +556,22 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     
     const files = Array.from(e.target.files).filter(file => 
       file.type === 'text/plain' || 
-      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      file.type === 'application/pdf'
     );
 
     if (files.length === 0) {
-      alert('Por favor, selecciona solo archivos .txt o .docx');
+      alert('Por favor, selecciona solo archivos .txt, .docx o .pdf');
       return;
+    }
+
+    // Verificar tamaño de archivos (advertir si son > 5MB)
+    const largeFiles = files.filter(file => file.size > 5 * 1024 * 1024);
+    if (largeFiles.length > 0) {
+      const fileNames = largeFiles.map(f => f.name).join(', ');
+      if (!confirm(`Los siguientes archivos son muy grandes (>${5} MB):\n\n${fileNames}\n\nLa subida puede tardar más tiempo. ¿Continuar?`)) {
+        return;
+      }
     }
 
     const newFiles = files.map(file => ({
@@ -529,7 +622,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           formData.append('projectId', projectId);
           formData.append('title', fileData.title);
 
-          const response = await authenticatedFetch('/api/knowledge', {
+          const response = await authenticatedFetchMongo('/knowledge', {
             method: 'POST',
             body: formData,
           });
@@ -543,7 +636,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
           // Si se asignó un área, asignarla
           if (fileData.areaId) {
-            const assignResponse = await authenticatedFetch(`/api/knowledge/${newKnowledge.id}/assign-areas`, {
+            const assignResponse = await authenticatedFetchMongo(`/knowledge/${newKnowledge.knowledge._id}/assign-areas`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ areaIds: [fileData.areaId] }),
@@ -553,7 +646,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               // Actualizar el conocimiento con las áreas asignadas
               const areaData = areas.find(a => a.id === fileData.areaId);
               if (areaData) {
-                newKnowledge.knowledge_areas = [{
+                newKnowledge.knowledge.knowledge_areas = [{
                   area_id: fileData.areaId,
                   areas: {
                     id: areaData.id,
@@ -566,7 +659,21 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           }
 
           setUploadProgress(prev => ({ ...prev, [index]: 'success' }));
-          return { ...newKnowledge, knowledge_areas: newKnowledge.knowledge_areas || [] };
+          
+          // Mapear la estructura de MongoDB al formato frontend
+          const mappedKnowledge = {
+            id: newKnowledge.knowledge._id,
+            title: newKnowledge.knowledge.title,
+            content: newKnowledge.knowledge.content,
+            source_type: newKnowledge.knowledge.sourceType,
+            file_name: newKnowledge.knowledge.fileInfo?.originalName,
+            file_size: newKnowledge.knowledge.fileInfo?.fileSize,
+            notes: newKnowledge.knowledge.notes,
+            uploaded_at: newKnowledge.knowledge.createdAt,
+            knowledge_areas: newKnowledge.knowledge.knowledge_areas || []
+          };
+          
+          return mappedKnowledge;
         } catch (error) {
           console.error(`Error uploading file ${index}:`, error);
           setUploadProgress(prev => ({ ...prev, [index]: 'error' }));
@@ -576,7 +683,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
       const results = await Promise.allSettled(uploadPromises);
       const successfulUploads = results
-        .filter((result): result is PromiseFulfilledResult<Knowledge> => result.status === 'fulfilled')
+        .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
         .map(result => result.value);
 
       // Actualizar lista de conocimiento con las subidas exitosas
@@ -889,7 +996,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
                       Arrastra múltiples archivos aquí
                     </h4>
                     <p className="text-gray-500 mb-4">
-                      Soporta archivos .txt y .docx. Podrás asignar cada archivo a un área específica.
+                      Soporta archivos .txt, .docx y .pdf. Podrás asignar cada archivo a un área específica.
                     </p>
                     <div className="flex justify-center">
                       <label className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg font-medium cursor-pointer">
@@ -897,7 +1004,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
                         <input
                           type="file"
                           multiple
-                          accept=".txt,.docx"
+                          accept=".txt,.docx,.pdf"
                           onChange={handleFileInputChange}
                           className="hidden"
                         />
@@ -1210,11 +1317,11 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Archivo (.txt, .docx)
+                  Archivo (.txt, .docx, .pdf)
                 </label>
                 <input
                   type="file"
-                  accept=".txt,.docx"
+                  accept=".txt,.docx,.pdf"
                   onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -1387,7 +1494,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
                   <input
                     type="file"
                     multiple
-                    accept=".txt,.docx"
+                    accept=".txt,.docx,.pdf"
                     onChange={handleFileInputChange}
                     className="hidden"
                   />

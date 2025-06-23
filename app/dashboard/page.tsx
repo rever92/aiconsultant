@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
 import { useRouter } from 'next/navigation';
-import { authenticatedFetch } from '@/lib/supabase/client';
 
 interface Project {
   id: string;
@@ -57,41 +56,40 @@ export default function DashboardPage() {
     }
   }, [user, authLoading, router]);
 
-  // Cargar proyectos reales de Supabase
+  // Cargar proyectos desde MongoDB
   useEffect(() => {
     const loadProjects = async () => {
       try {
-        console.log('Cargando proyectos desde Supabase...');
-        const response = await authenticatedFetch('/api/projects');
+        console.log('Cargando proyectos desde MongoDB...');
+        const token = localStorage.getItem('token');
+        
+        const response = await fetch('http://localhost:5000/api/projects', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
         
         if (!response.ok) {
           throw new Error(`Error: ${response.status}`);
         }
         
         const data = await response.json();
-        console.log('Proyectos cargados:', data);
-        setProjects(data);
+        console.log('Proyectos cargados desde MongoDB:', data);
+        setProjects(data.projects || data); // El backend puede devolver { projects: [] } o directamente []
       } catch (error) {
         console.error('Error loading projects:', error);
-        // Usar datos mock como fallback
-        const mockProjects: Project[] = [
-          {
-            id: '1',
-            name: 'Proyecto Demo - Análisis Organizacional',
-            description: 'Análisis completo de procesos y sistemas de la organización para identificar oportunidades de mejora.',
-            status: 'NOTES_GENERATED',
-            created_at: '2024-01-15T10:00:00Z',
-            updated_at: '2024-01-16T14:30:00Z'
-          }
-        ];
-        setProjects(mockProjects);
+        // Si hay error, mostrar array vacío (usuario empezará desde cero)
+        setProjects([]);
       } finally {
         setIsLoading(false);
       }
     };
 
-    loadProjects();
-  }, []);
+    if (user) {
+      loadProjects();
+    }
+  }, [user]);
 
   const handleCreateProject = async () => {
     if (!newProject.name.trim()) return;
@@ -99,10 +97,13 @@ export default function DashboardPage() {
     setIsCreating(true);
     
     try {
-      console.log('Creando proyecto:', newProject);
-      const response = await authenticatedFetch('/api/projects', {
+      console.log('Creando proyecto en MongoDB:', newProject);
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch('http://localhost:5000/api/projects', {
         method: 'POST',
         headers: {
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -112,18 +113,20 @@ export default function DashboardPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Error: ${response.status}`);
       }
 
-      const project = await response.json();
-      console.log('Proyecto creado:', project);
+      const result = await response.json();
+      const project = result.project || result; // El backend puede devolver { project: {} } o directamente {}
+      console.log('Proyecto creado en MongoDB:', project);
       
       setProjects(prev => [project, ...prev]);
       setNewProject({ name: '', description: '' });
       setShowCreateForm(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating project:', error);
-      alert('Error creando el proyecto. Por favor intenta de nuevo.');
+      alert('Error creando el proyecto: ' + (error.message || error));
     } finally {
       setIsCreating(false);
     }
@@ -186,6 +189,14 @@ export default function DashboardPage() {
               >
                 Proyectos
               </Link>
+              {user?.role === 'admin' && (
+                <Link 
+                  href="/admin/users" 
+                  className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                >
+                  Usuarios
+                </Link>
+              )}
               {user && (
                 <div className="flex items-center space-x-4">
                   <span className="text-sm text-gray-600">{user.email}</span>
@@ -396,7 +407,7 @@ export default function DashboardPage() {
         {/* Quick Actions */}
         <div className="mt-8">
           <h2 className="text-xl font-semibold text-gray-800 mb-4">Acciones Rápidas</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className={`grid grid-cols-1 ${user?.role === 'admin' ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6`}>
             <Link href="/transcription" className="group">
               <div className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition-shadow group-hover:scale-105 transform duration-200">
                 <div className="text-blue-600 text-3xl mb-3">🎤</div>
@@ -416,6 +427,16 @@ export default function DashboardPage() {
               <h3 className="font-semibold text-gray-800 mb-2">Plantillas</h3>
               <p className="text-gray-600 text-sm">Crear proyecto desde plantilla (Próximamente)</p>
             </div>
+            
+            {user?.role === 'admin' && (
+              <Link href="/admin/users" className="group">
+                <div className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition-shadow group-hover:scale-105 transform duration-200">
+                  <div className="text-red-600 text-3xl mb-3">👥</div>
+                  <h3 className="font-semibold text-gray-800 mb-2">Gestión de Usuarios</h3>
+                  <p className="text-gray-600 text-sm">Aprobar usuarios y gestionar permisos</p>
+                </div>
+              </Link>
+            )}
           </div>
         </div>
       </div>

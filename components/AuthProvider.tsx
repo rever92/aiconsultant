@@ -1,32 +1,31 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
-import { User as SupabaseUser, Session } from '@supabase/supabase-js';
-
-// Cliente de Supabase
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 interface UserProfile {
   id: string;
   email: string;
-  full_name?: string;
+  fullName?: string;
   role: 'admin' | 'consultor';
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-interface User extends SupabaseUser {
-  profile?: UserProfile;
+interface User {
+  id: string;
+  email: string;
+  fullName?: string;
+  role: 'admin' | 'consultor';
+  isActive: boolean;
+  lastLogin?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
-  session: Session | null;
+  session: any | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, fullName?: string) => Promise<void>;
@@ -38,97 +37,124 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Configuración del backend
+const API_BASE = 'http://localhost:5000/api';
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Cargar perfil de usuario
-  const loadUserProfile = async (userId: string): Promise<UserProfile | null> => {
-    try {
-      console.log('🔍 loadUserProfile: Intentando cargar perfil para userId:', userId);
-      
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+  // Función para obtener el token del localStorage
+  const getToken = (): string | null => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('token');
+    }
+    return null;
+  };
 
-      if (error) {
-        console.error('❌ loadUserProfile: Error loading user profile:', error);
-        console.error('❌ loadUserProfile: Error details:', {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint
-        });
-        return null;
+  // Función para guardar el token en localStorage
+  const saveToken = (token: string, refreshToken?: string) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('token', token);
+      if (refreshToken) {
+        localStorage.setItem('refreshToken', refreshToken);
+      }
+    }
+  };
+
+  // Función para limpiar tokens
+  const clearTokens = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
+    }
+  };
+
+  // Función para hacer peticiones autenticadas
+  const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
+    const token = getToken();
+    
+    const config = {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    };
+
+    return fetch(url, config);
+  };
+
+  // Cargar perfil de usuario
+  const loadUserProfile = async (): Promise<User | null> => {
+    try {
+      console.log('🔍 loadUserProfile: Cargando perfil de usuario...');
+      
+      const response = await authenticatedFetch(`${API_BASE}/auth/me`);
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          // Token inválido, limpiar y logout
+          clearTokens();
+          setUser(null);
+          setProfile(null);
+          setSession(null);
+          return null;
+        }
+        throw new Error(`Error ${response.status}: ${response.statusText}`);
       }
 
-      console.log('✅ loadUserProfile: Perfil cargado exitosamente:', data);
-      return data;
+      const data = await response.json();
+      console.log('✅ loadUserProfile: Perfil cargado exitosamente:', data.user);
+      return data.user;
     } catch (error) {
-      console.error('❌ loadUserProfile: Exception loading user profile:', error);
+      console.error('❌ loadUserProfile: Error loading user profile:', error);
       return null;
     }
   };
 
   // Refrescar perfil del usuario actual
   const refreshProfile = async () => {
-    if (!user?.id) return;
-    
-    const userProfile = await loadUserProfile(user.id);
-    setProfile(userProfile);
-    
-    if (userProfile && user) {
-      setUser({ ...user, profile: userProfile });
-    }
-  };
-
-  // Manejar cambios de sesión
-  const handleAuthStateChange = async (event: string, session: Session | null) => {
-    console.log('🔄 handleAuthStateChange: Evento:', event, 'Session:', !!session);
-    
-    setSession(session);
-    
-    if (session?.user) {
-      console.log('👤 handleAuthStateChange: Usuario encontrado en sesión:', session.user.id);
-      console.log('📧 handleAuthStateChange: Email del usuario:', session.user.email);
-      
-      const userProfile = await loadUserProfile(session.user.id);
-      const userWithProfile = { ...session.user, profile: userProfile || undefined };
-      
-      console.log('🔗 handleAuthStateChange: Usuario con perfil configurado:', {
-        hasUser: !!userWithProfile,
-        hasProfile: !!userProfile,
-        userId: userWithProfile.id,
-        profileRole: userProfile?.role
-      });
-      
-      setUser(userWithProfile);
+    const userProfile = await loadUserProfile();
+    if (userProfile) {
+      setUser(userProfile);
       setProfile(userProfile);
-    } else {
-      console.log('🚫 handleAuthStateChange: No hay sesión, limpiando estado');
-      setUser(null);
-      setProfile(null);
+      setSession({ user: userProfile });
     }
-    
-    console.log('✅ handleAuthStateChange: Finalizando, setLoading(false)');
-    setLoading(false);
   };
 
-  // Configurar listener de autenticación
+  // Verificar autenticación al cargar
   useEffect(() => {
-    // Obtener sesión inicial
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      handleAuthStateChange('INITIAL_SESSION', session);
-    });
+    const initAuth = async () => {
+      console.log('🔄 AuthProvider: Inicializando autenticación...');
+      
+      const token = getToken();
+      if (!token) {
+        console.log('🚫 AuthProvider: No hay token, usuario no autenticado');
+        setLoading(false);
+        return;
+      }
 
-    // Escuchar cambios de autenticación
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(handleAuthStateChange);
+      console.log('🔍 AuthProvider: Token encontrado, verificando validez...');
+      const userProfile = await loadUserProfile();
+      
+      if (userProfile) {
+        console.log('✅ AuthProvider: Usuario autenticado correctamente');
+        setUser(userProfile);
+        setProfile(userProfile);
+        setSession({ user: userProfile });
+      } else {
+        console.log('❌ AuthProvider: Token inválido, limpiando sesión');
+        clearTokens();
+      }
+      
+      setLoading(false);
+    };
 
-    return () => subscription?.unsubscribe();
+    initAuth();
   }, []);
 
   // Función de login
@@ -137,37 +163,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     
     try {
-      console.log('🔐 signIn: Llamando a supabase.auth.signInWithPassword...');
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      console.log('🔐 signIn: Enviando credenciales al backend...');
+      const response = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
       });
 
-      console.log('📥 signIn: Respuesta de Supabase:', {
+      const data = await response.json();
+
+      console.log('📥 signIn: Respuesta del backend:', {
+        ok: response.ok,
+        status: response.status,
         hasData: !!data,
-        hasError: !!error,
-        hasSession: !!data?.session,
-        hasUser: !!data?.user,
-        userId: data?.user?.id,
-        errorMessage: error?.message
+        hasUser: !!data.user,
+        hasToken: !!data.token
       });
 
-      if (error) {
-        console.error('❌ signIn: Error de Supabase:', error);
-        throw new Error(error.message);
+      if (!response.ok) {
+        if (response.status === 403 && data.code === 'PENDING_APPROVAL') {
+          // Error específico para usuarios pendientes de aprobación
+          throw new Error(data.error);
+        }
+        throw new Error(data.error || 'Error de conexión');
       }
 
-      if (!data.session) {
-        console.error('❌ signIn: No se recibió sesión en la respuesta');
-        throw new Error('No se pudo iniciar sesión');
+      if (!data.token || !data.user) {
+        throw new Error('Respuesta inválida del servidor');
       }
 
-      console.log('✅ signIn: Login exitoso, esperando handleAuthStateChange...');
-      // El handleAuthStateChange se encargará de cargar el perfil
+      // Guardar tokens
+      saveToken(data.token, data.refreshToken);
+
+      // Actualizar estado
+      setUser(data.user);
+      setProfile(data.user);
+      setSession({ user: data.user });
+
+      console.log('✅ signIn: Login exitoso');
     } catch (error) {
-      console.error('❌ signIn: Exception en signIn:', error);
+      console.error('❌ signIn: Error en login:', error);
       setLoading(false);
       throw error;
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -176,32 +217,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName || '',
-          }
-        }
+      const response = await fetch(`${API_BASE}/auth/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password, fullName }),
       });
 
-      if (error) {
-        throw new Error(error.message);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Error en el registro');
       }
 
-      if (!data.user) {
-        throw new Error('Error en el registro');
+      // Si requiere aprobación, no hacer auto-login
+      if (data.requiresApproval) {
+        // El usuario se registró exitosamente pero necesita aprobación
+        // No guardamos tokens ni actualizamos estado
+        return;
       }
 
-      // Si el usuario se creó exitosamente pero necesita confirmación de email
-      if (!data.session) {
-        throw new Error('Revisa tu email para confirmar tu cuenta antes de iniciar sesión.');
+      // Auto-login después del registro exitoso (solo si está aprobado)
+      if (data.token && data.user) {
+        saveToken(data.token, data.refreshToken);
+        setUser(data.user);
+        setProfile(data.user);
+        setSession({ user: data.user });
       }
 
     } catch (error) {
       setLoading(false);
       throw error;
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -210,32 +259,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     
     try {
-      const { error } = await supabase.auth.signOut();
-      
-      if (error) {
-        throw new Error(error.message);
+      // Intentar logout en el backend
+      const token = getToken();
+      if (token) {
+        await authenticatedFetch(`${API_BASE}/auth/logout`, {
+          method: 'POST',
+        });
       }
-
-      // Limpiar estado local
+    } catch (error) {
+      console.error('Error en logout del backend:', error);
+      // Continuar con logout local aunque falle el backend
+    } finally {
+      // Limpiar estado local siempre
+      clearTokens();
       setUser(null);
       setProfile(null);
       setSession(null);
-    } catch (error) {
-      console.error('Error signing out:', error);
-      throw error;
-    } finally {
       setLoading(false);
     }
   };
 
   // Verificar si el usuario es admin
   const isAdmin = (): boolean => {
-    return profile?.role === 'admin';
+    return user?.role === 'admin';
   };
 
   // Verificar si el usuario es consultor
   const isConsultor = (): boolean => {
-    return profile?.role === 'consultor';
+    return user?.role === 'consultor';
   };
 
   const value = {

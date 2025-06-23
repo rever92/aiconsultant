@@ -12,6 +12,23 @@ El proyecto ha migrado exitosamente de un sistema de "transcripciones" a un sist
 - **Organización por áreas** con asignación flexible
 - **Área Global automática** en cada proyecto para conocimiento general
 
+## 🔧 CORRECCIÓN CRÍTICA DE AUTENTICACIÓN - COMPLETADA
+
+**Problema detectado y corregido:** Los endpoints de la API estaban usando clientes de Supabase inconsistentes:
+- ✅ **Creación de proyectos**: Usaba `createServerSupabaseClient(true)` con autenticación correcta
+- ❌ **Lectura de proyectos**: Usaba cliente básico sin autenticación
+- **Resultado**: Proyectos se creaban pero no se podían recuperar (error 404)
+
+**Solución aplicada:**
+- ✅ Corregido `app/api/projects/[id]/route.ts` para usar autenticación consistente
+- ✅ Corregido `app/api/projects/[id]/advance-step/route.ts` 
+- ✅ Corregido `app/api/areas/[id]/route.ts`
+- ✅ Agregados filtros de seguridad por `user_id` en todas las consultas
+
+**Endpoints con autenticación correcta verificada:**
+- ✅ `app/api/areas/route.ts` - YA ESTABA CORRECTO
+- ✅ `app/api/knowledge/route.ts` - YA ESTABA CORRECTO
+
 ## Variables de Entorno Requeridas
 
 ```env
@@ -903,6 +920,57 @@ El flujo guiado de 4 pasos está ahora **completamente configurado** en la base 
 - Implementar análisis de contenido con IA
 - Añadir exportación de conocimiento
 - Implementar versionado de contenido 
+
+## ✅ MIGRACIÓN A MONGODB - COMPLETADA
+
+**IMPORTANTE**: Migración exitosa de Supabase a MongoDB + Express.js.
+
+### ✅ Estado de la Migración:
+- ✅ **Backend Express.js**: Configurado con autenticación JWT
+- ✅ **MongoDB**: Modelos de datos creados (User, Project, Area, Knowledge)
+- ✅ **Autenticación**: Login/registro con bcrypt + JWT
+- ✅ **Sistema de Aprobación**: Usuarios requieren aprobación de admin
+- ✅ **APIs REST**: Autenticación y gestión de usuarios completadas
+- ✅ **Frontend**: AuthProvider migrado a MongoDB
+- ✅ **Panel de Admin**: Gestión completa de usuarios implementada
+- ⏳ **APIs REST**: Pendiente migración de endpoints de proyectos y conocimiento
+- ⏳ **Datos**: Pendiente migración de datos existentes de Supabase
+
+### 📍 Ubicación del nuevo backend:
+```
+/backend/
+├── src/
+│   ├── models/         # Modelos MongoDB (reemplazan tablas Supabase)
+│   ├── routes/         # APIs REST (reemplazan Supabase Functions) 
+│   ├── middleware/     # Autenticación JWT (reemplaza Supabase Auth)
+│   └── config/         # Configuración DB
+└── README.md           # Instrucciones completas
+```
+
+### 🎯 Sistema de Usuarios y Aprobación:
+
+#### **Flujo de Registro/Aprobación:**
+1. **Usuario se registra** → Estado: `isApproved: false`
+2. **Admin aprueba** → Estado: `isApproved: true, approvedBy: adminId, approvedAt: fecha`
+3. **Usuario puede hacer login** → Solo si `isApproved: true`
+
+#### **Credenciales Admin por defecto:**
+- **Email**: `admin@aiconsultant.com`
+- **Password**: `admin123456` 
+- **Estado**: Auto-aprobado
+
+#### **Panel de Administración:**
+- **URL**: `http://localhost:3000/admin/users`
+- **Funciones**: Aprobar/rechazar usuarios, cambiar roles, ver estadísticas
+- **Acceso**: Solo usuarios con `role: 'admin'`
+
+### 🎯 Próximos pasos:
+1. **Migrar APIs de proyectos** desde Supabase a MongoDB
+2. **Migrar APIs de conocimiento** desde Supabase a MongoDB
+3. **Actualizar frontend** para usar endpoints MongoDB
+4. **Migrar datos existentes** desde Supabase a MongoDB
+
+---
 
 ## 🚀 NUEVO: Flujo de Consultoría Guiado - 4 Pasos
 
@@ -2851,3 +2919,64 @@ SELECT name, user_id, created_at FROM projects ORDER BY created_at DESC LIMIT 5;
 
 */
 ```
+
+# Actualización del Backend MongoDB - Soporte de Archivos Grandes
+
+## Cambios Realizados [2025-01-04]
+
+### 1. Aumento del Límite de Contenido
+- **Modelo Knowledge**: Aumentado límite de contenido de 50,000 a 500,000 caracteres
+- **Razón**: Soportar transcripciones largas de videos y documentos extensos
+
+### 2. Soporte de Múltiples Formatos de Archivo
+- **Archivos soportados**: `.txt`, `.docx`, `.pdf`
+- **Librerías utilizadas**:
+  - `mammoth` para extraer texto de archivos .docx
+  - `pdf-parse` para extraer texto de archivos .pdf
+
+### 3. Limpieza Automática de Transcripciones
+- **Funcionalidad**: Detecta y limpia automáticamente transcripciones con timestamps
+- **Limpia**:
+  - Timestamps tipo `00:00:01,979 --> 00:05:57,339`
+  - Marcadores de timestamp en corchetes `[00:00:01,979 --> 00:05:57,339]`
+  - Marcadores de speaker `- [speaker_0]`
+  - Líneas vacías múltiples
+
+### 4. Eliminación de APIs Conflictivas
+- **Eliminadas**: APIs de Supabase/Next.js que causaban errores de JWT
+  - `/api/projects/`
+  - `/api/areas/`
+  - `/api/knowledge/`
+- **Razón**: Evitar conflictos entre sistemas MongoDB y Supabase
+
+## Scripts SQL Ejecutados
+
+```sql
+-- No aplican cambios SQL, todos los cambios son en el backend MongoDB
+```
+
+## Estructura de Archivos Backend
+
+```
+backend/
+├── src/
+│   ├── models/
+│   │   └── Knowledge.js (ACTUALIZADO - límite 500k caracteres)
+│   ├── routes/
+│   │   └── knowledge.js (ACTUALIZADO - soporte múltiples formatos + limpieza)
+│   └── middleware/
+└── uploads/ (directorio para archivos subidos)
+```
+
+## Testing Requerido
+
+1. **Subida de archivos grandes**: Transcripciones > 50k caracteres
+2. **Múltiples formatos**: .txt, .docx, .pdf
+3. **Limpieza de transcripciones**: Archivos con timestamps
+4. **Funcionalidad existente**: Verificar que no se rompió nada
+
+---
+
+# Documentación Original de Supabase
+
+*[Contenido original continúa...]*

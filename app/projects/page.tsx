@@ -46,16 +46,22 @@ export default function ProjectsPage() {
   useEffect(() => {
     const loadProjects = async () => {
       try {
-        console.log('Cargando proyectos...');
-        const response = await fetch('/api/projects');
+        console.log('Cargando proyectos desde MongoDB...');
+        const token = localStorage.getItem('token');
+        const response = await fetch('http://localhost:5000/api/projects', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
         
         if (!response.ok) {
           throw new Error(`Error: ${response.status}`);
         }
         
         const data = await response.json();
-        console.log('Proyectos cargados:', data);
-        setProjects(data);
+        console.log('Proyectos cargados desde MongoDB:', data);
+        setProjects(data.projects || data);
       } catch (error) {
         console.error('Error loading projects:', error);
         setError('Error cargando los proyectos');
