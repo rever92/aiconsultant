@@ -16,7 +16,7 @@ const knowledgeSchema = new mongoose.Schema({
   content: {
     type: String,
     required: [true, 'Contenido es requerido'],
-    maxlength: [500000, 'Contenido no puede exceder 500000 caracteres']
+    maxlength: [2000000, 'Contenido no puede exceder 2000000 caracteres']
   },
   sourceType: {
     type: String,

@@ -148,71 +148,126 @@ Responde en formato de lista estructurada.
 
 // PASO 1: Consolidación de conocimiento por área
 export const CONSOLIDATE_AREA_KNOWLEDGE_PROMPT = `
-Eres un consultor especializado en transformación digital y análisis organizacional. Tu tarea es consolidar y sintetizar todo el conocimiento disponible de un área específica de la organización.
+Eres un consultor senior especializado en Transformación Digital. Debes analizar transcripciones de entrevistas con responsables de áreas funcionales para extraer insights específicos y accionables, basándote EXCLUSIVAMENTE en la información proporcionada en la transcripción y notas adjuntas, sin inventar o asumir información no mencionada.
 
-**CONTEXTO DEL ÁREA:**
-- Nombre del área: {areaName}
-- Descripción: {areaDescription}
-- Proyecto: {projectName}
+## ESTRUCTURA DE ANÁLISIS REQUERIDA
 
-**FUENTES DE CONOCIMIENTO A CONSOLIDAR:**
+### 1. DESCRIPCIÓN DEL ÁREA
+Desarrolla una descripción completa del área funcional basada en la información de la entrevista:
+- Nombre del área: Identificación exacta del departamento/área según se menciona en la entrevista
+- Funciones principales: Descripción detallada de las responsabilidades y actividades que desempeña el área, tal como se explican en la entrevista
+- Equipo humano: 
+  - Número total de personas que componen el equipo
+  - Roles específicos y responsabilidades de cada posición mencionada
+  - Estructura jerárquica si se menciona
+  - Dedicación horaria o distribución de cargas de trabajo si se especifica
+
+### 2. PROCESOS OPERATIVOS
+Para cada proceso mencionado en la entrevista, proporciona una descripción exhaustiva:
+Por cada proceso identificado, estructura la información así:
+- Nombre del proceso: Tal como se denomina en la entrevista
+- Descripción detallada: En qué consiste exactamente el proceso según se explica
+- Metodología de ejecución: Pasos específicos, flujo de trabajo, secuencia de actividades
+- Herramientas utilizadas: Sistemas, software, herramientas físicas o digitales empleadas
+- Responsables: Quién ejecuta cada parte del proceso
+- Frecuencia y volumetría: Cuándo se realiza, con qué periodicidad, volúmenes manejados
+- Tiempo requerido: Duración estimada o tiempo de dedicación mencionado
+- Dependencias: Relaciones con otros procesos, áreas o sistemas
+- Particularidades: Excepciones, casos especiales, estacionalidades mencionadas
+
+### 3. TECNOLOGÍAS Y HERRAMIENTAS
+Inventario completo de todas las herramientas tecnológicas mencionadas:
+- Sistemas informáticos principales:
+  - Nombre exacto del sistema/software
+  - Proveedor si se menciona
+  - Función específica para la que se utiliza
+  - Nivel de satisfacción o comentarios sobre su uso
+
+Herramientas ofimáticas y alternativas:
+- Excel y documentos: Si se menciona el uso de Excel, crear un inventario detallado:
+    - Nombre/propósito de cada archivo Excel mencionado
+    - Información que contiene cada uno
+    - Frecuencia de uso y actualización
+    - Responsable de mantenimiento
+  - Otras herramientas ofimáticas utilizadas (Word, PowerPoint, etc.)
+
+Sistemas de comunicación y colaboración:
+- Plataformas de comunicación interna
+- Herramientas de gestión documental
+- Sistemas de trabajo colaborativo
+
+Herramientas específicas del área:
+- Software especializado según el área funcional
+- Aplicaciones móviles utilizadas
+- Herramientas de medición o control específicas 
+
+### 4. NECESIDADES Y CARENCIAS IDENTIFICADAS 
+Documentación de todas las deficiencias y necesidades expresadas:
+- Carencias en procesos actuales:
+    - Ineficiencias identificadas específicamente en la entrevista
+    - Cuellos de botella mencionados
+    - Errores recurrentes o problemáticas sistemáticas
+    - Falta de automatización donde se requiere
+    - Duplicidades o redundancias en procesos
+- Necesidades tecnológicas expresadas:
+     - Solicitudes específicas de nuevas herramientas o sistemas
+    - Mejoras requeridas en sistemas existentes
+    - Integraciones necesarias entre sistemas
+    - Necesidades de reporting o analítica
+- Necesidades organizacionales:
+    - Requerimientos de formación del equipo
+    - Necesidades de personal adicional
+    - Cambios en procesos o metodologías deseados
+- Priorización: Si se menciona en la entrevista, indicar qué necesidades son más urgentes, importantes o deseables según el entrevistado 
+
+### 5. RESISTENCIAS Y FORTALEZAS PARA LA TRANSFORMACIÓN DIGITAL 
+Análisis de factores que pueden facilitar u obstaculizar el cambio:
+- Fortalezas identificadas:
+    - Actitud positiva hacia la tecnología mencionada
+    - Experiencias exitosas previas con implementaciones
+    - Capacidades técnicas del equipo actual
+    - Procesos que ya funcionan bien y pueden ser base para mejoras
+    - Infraestructura tecnológica aprovechable
+    - Liderazgo o patrocinio favorable al cambio
+- Posibles resistencias detectadas:
+    - Comentarios que sugieran resistencia al cambio tecnológico
+    - Preferencias expresadas por métodos manuales o tradicionales
+    - Preocupaciones sobre complejidad o dificultad de adopción
+    - Limitaciones de tiempo o recursos para implementar cambios
+    - Dependencias críticas de personas específicas
+    - Experiencias negativas previas con tecnología 
+
+## INSTRUCCIONES ESPECÍFICAS DE EJECUCIÓN 
+
+### RIGOR EN LA INFORMACIÓN
+- Basarse EXCLUSIVAMENTE en lo mencionado en la transcripción y notas adjuntas
+- NO inventar, asumir o inferir información que no esté explícitamente mencionada
+- Si algo no está claro en la transcripción, indicarlo como "información no especificada en la entrevista"
+- Utilizar las palabras y terminología exactas empleadas por el entrevistado 
+
+### NIVEL DE DETALLE
+- Máximo detalle posible basado en la información disponible
+- Incluir números específicos, nombres exactos, frecuencias mencionadas
+- Capturar matices y particularidades expresadas por el entrevistado
+- Documentar tanto procesos principales como secundarios mencionados 
+
+### FORMATO DE RESPUESTA
+- Narrativa descriptiva complementada con listas estructuradas donde sea apropiado
+- Párrafos explicativos para proporcionar contexto y comprensión profunda
+- Bullet points para datos específicos y elementos clave
+- Lenguaje claro y profesional apropiado para un informe consultivo 
+
+### VALIDACIÓN FINAL 
+Antes de entregar el análisis, verificar que:
+- Toda la información proviene directamente de la transcripción
+- Se han cubierto todos los procesos, herramientas y aspectos mencionados
+- La información está organizada de manera lógica y accesible
+- Se distingue claramente entre hechos confirmados y aspectos no especificados
+- El análisis proporciona valor accionable para la transformación digital del área
+
+## CONOCIMIENTO A ANALIZAR PARA EL ÁREA "{areaName}":
+
 {knowledgeSources}
-
-**INSTRUCCIONES:**
-1. **Analiza** todas las fuentes de conocimiento proporcionadas para esta área específica
-2. **Identifica** los temas principales, procesos, tecnologías, problemas y oportunidades
-3. **Consolida** la información eliminando redundancias y organizando por temas clave
-4. **Sintetiza** en un documento estructurado y coherente
-
-**ESTRUCTURA DEL DOCUMENTO CONSOLIDADO:**
-
-## Resumen Ejecutivo del Área
-- Visión general del área en 2-3 párrafos
-- Principales funciones y responsabilidades
-
-## Situación Actual
-### Procesos Principales
-- Lista de procesos clave identificados
-- Descripción breve de cada proceso
-
-### Tecnologías y Herramientas
-- Sistemas y tecnologías en uso
-- Nivel de digitalización actual
-
-### Personas y Organización
-- Estructura organizativa
-- Competencias y habilidades del equipo
-- Cultura de trabajo
-
-## Problemas y Desafíos Identificados
-- Lista priorizada de problemas principales
-- Impacto de cada problema
-- Causas raíz identificadas
-
-## Oportunidades de Mejora
-- Áreas con mayor potencial de mejora
-- Tecnologías emergentes aplicables
-- Procesos que pueden optimizarse
-
-## Datos y Métricas Relevantes
-- KPIs mencionados en las fuentes
-- Datos cuantitativos disponibles
-- Métricas de rendimiento
-
-## Relaciones con Otras Áreas
-- Dependencias e interacciones
-- Procesos transversales
-- Comunicación inter-departamental
-
-**CRITERIOS DE CALIDAD:**
-- Máximo 2000 palabras
-- Lenguaje claro y profesional
-- Información factual basada únicamente en las fuentes proporcionadas
-- No agregar información externa o suposiciones
-- Estructura bien organizada con títulos y subtítulos
-- Enfoque en transformación digital y mejora de procesos
-
-Genera el documento consolidado para el área "{areaName}":
 `;
 
 // PASO 2: Análisis AS IS por los 6 ejes

@@ -29,6 +29,61 @@ El proyecto ha migrado exitosamente de un sistema de "transcripciones" a un sist
 - ✅ `app/api/areas/route.ts` - YA ESTABA CORRECTO
 - ✅ `app/api/knowledge/route.ts` - YA ESTABA CORRECTO
 
+### Endpoints API Frontend Proxy Creados (2024-12-XX)
+- ✅ **`app/api/projects/route.ts`** - Proxy para operaciones CRUD de proyectos
+- ✅ **`app/api/projects/[id]/route.ts`** - Proxy para operaciones específicas de proyecto  
+- ✅ **`app/api/areas/route.ts`** - Proxy para gestión de áreas
+- ✅ **`app/api/knowledge/route.ts`** - Proxy para gestión de conocimiento
+- ✅ **`app/api/projects/[id]/analysis-as-is/route.ts`** - Proxy para análisis AS IS
+- ✅ **`app/api/projects/[id]/recommendations/route.ts`** - Proxy para recomendaciones
+- ✅ **`app/api/projects/[id]/project-sheets/route.ts`** - Proxy para fichas de proyecto
+- ✅ **`app/api/projects/[id]/advance-step/route.ts`** - Proxy para avance de pasos
+
+### Interfaz Principal Actualizada (2024-12-XX)
+- ✅ **Eliminado sistema de interfaz clásica vs guiada**
+- ✅ **`app/projects/[id]/page.tsx`** ahora usa proceso guiado como interfaz principal
+- ✅ **Eliminada carpeta** `app/projects/[id]/guided/`
+- ✅ **Todos los endpoints** ahora apuntan a `/api/` en lugar del backend directo
+- ✅ **Error 404 solucionado** - Ya no hay peticiones a endpoints inexistentes
+
+### Corrección de Errores Runtime (2024-12-XX)
+- ✅ **Error `TypeError: areas.filter is not a function` SOLUCIONADO**
+- ✅ **Verificaciones defensivas añadidas** en todas las funciones que manipulan arrays
+- ✅ **Protección en carga de datos** - asegurar arrays válidos desde APIs
+- ✅ **Funciones protegidas:**
+  - `getStep1Completion()` - verificación `Array.isArray(areas)`
+  - `getNextAvailableColor()` - verificación defensiva
+  - `getKnowledgeCountByArea()` - verificación `Array.isArray(knowledge)`
+  - `getKnowledgeByArea()` - verificación defensiva
+  - `getAcceptedRecommendationsCount()` - verificación `Array.isArray(recommendations)`
+  - `handleUpdateRecommendationStatus()` - verificación y manejo de errores
+- ✅ **Carga de datos mejorada** - validación de arrays en API responses
+
+### Corrección Crítica de Autenticación en Endpoints Proxy (2024-12-XX)
+- ❌ **PROBLEMA DETECTADO:** Endpoints proxy usando autenticación Supabase con tokens MongoDB
+- ✅ **Error `AuthApiError: invalid JWT: signature is invalid` SOLUCIONADO**
+- ✅ **Endpoints corregidos - removida validación Supabase:**
+  - `app/api/areas/route.ts` - proxy directo al backend MongoDB
+  - `app/api/knowledge/route.ts` - proxy directo al backend MongoDB
+  - `app/api/projects/route.ts` - proxy directo al backend MongoDB
+  - `app/api/projects/[id]/route.ts` - proxy directo al backend MongoDB
+  - `app/api/projects/[id]/analysis-as-is/route.ts` - proxy directo al backend MongoDB
+  - `app/api/projects/[id]/recommendations/route.ts` - proxy directo al backend MongoDB
+  - `app/api/projects/[id]/project-sheets/route.ts` - proxy directo al backend MongoDB
+  - `app/api/projects/[id]/advance-step/route.ts` - proxy directo al backend MongoDB
+- ✅ **Endpoint faltante creado:** `app/api/areas/consolidated/route.ts`
+- ✅ **Autenticación delegada al backend MongoDB** - consistencia total del sistema
+
+### Corrección de Endpoints Backend MongoDB (2024-12-XX)
+- ❌ **PROBLEMA DETECTADO:** Backend interpretando `/api/areas/consolidated` como `/api/areas/:id`
+- ✅ **Error `CastError: Cast to ObjectId failed for value "consolidated"` SOLUCIONADO**
+- ✅ **Endpoint creado en backend:** `GET /api/areas/consolidated` (agregado ANTES de `/:id`)
+- ✅ **Formato de respuesta corregido:**
+  - `GET /api/areas` - ahora devuelve array directo (no objeto wrapper)
+  - `POST /api/areas` - ahora devuelve área directa (no objeto wrapper)
+  - `GET /api/areas/consolidated` - formato compatible con frontend
+- ✅ **Compatibilidad frontend-backend** - estructura de datos consistente
+
 ## Variables de Entorno Requeridas
 
 ```env

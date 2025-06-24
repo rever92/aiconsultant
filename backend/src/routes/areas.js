@@ -36,10 +36,8 @@ router.get('/', authenticateToken, async (req, res) => {
 
     console.log(`✅ Encontradas ${areas.length} áreas`);
     
-    res.json({
-      success: true,
-      areas: areas
-    });
+    // Devolver directamente el array para compatibilidad con el frontend
+    res.json(areas);
   } catch (error) {
     console.error('❌ Error obteniendo áreas:', error);
     res.status(500).json({
@@ -95,10 +93,8 @@ router.post('/', authenticateToken, async (req, res) => {
     const savedArea = await area.save();
     console.log('✅ Área creada exitosamente:', savedArea._id);
 
-    res.status(201).json({
-      success: true,
-      area: savedArea
-    });
+    // Devolver directamente el área para compatibilidad con el frontend
+    res.status(201).json(savedArea);
   } catch (error) {
     console.error('❌ Error creando área:', error);
     
@@ -113,6 +109,178 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Ya existe un área con ese nombre en este proyecto'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor'
+    });
+  }
+});
+
+// GET /api/areas/consolidated - Obtener conocimiento consolidado de áreas de un proyecto
+router.get('/consolidated', authenticateToken, async (req, res) => {
+  try {
+    const { projectId } = req.query;
+
+    if (!projectId) {
+      return res.status(400).json({
+        success: false,
+        error: 'projectId es requerido'
+      });
+    }
+
+    console.log('📚 Obteniendo conocimiento consolidado para proyecto:', projectId);
+    
+    // Obtener todas las áreas del proyecto que tienen conocimiento consolidado
+    const areasWithConsolidated = await Area.find({
+      projectId: projectId,
+      'consolidatedKnowledge.content': { $exists: true, $ne: null }
+    })
+    .populate('projectId', 'name userId')
+    .lean();
+
+    // Verificar que el usuario tenga acceso al proyecto
+    if (areasWithConsolidated.length > 0) {
+      const userCanAccess = areasWithConsolidated.some(area => 
+        area.projectId && area.projectId.userId.toString() === req.user._id.toString()
+      );
+
+      if (!userCanAccess) {
+        return res.status(403).json({
+          success: false,
+          error: 'No tienes acceso a este proyecto'
+        });
+      }
+    }
+
+    // Transformar la respuesta para que coincida con la estructura esperada por el frontend
+    const consolidatedKnowledge = areasWithConsolidated.map(area => ({
+      id: area._id.toString() + '_consolidated',
+      area_id: area._id.toString(),
+      content: area.consolidatedKnowledge.content,
+      ai_generated: area.consolidatedKnowledge.aiGenerated || true,
+      validated: area.consolidatedKnowledge.validated || false,
+      original_sources_count: area.consolidatedKnowledge.originalSourcesCount || 0,
+      created_at: area.consolidatedKnowledge.createdAt || area.createdAt,
+      updated_at: area.consolidatedKnowledge.updatedAt || area.updatedAt
+    }));
+
+    console.log(`✅ Encontrado conocimiento consolidado en ${consolidatedKnowledge.length} áreas`);
+    
+    res.json(consolidatedKnowledge);
+  } catch (error) {
+    console.error('❌ Error obteniendo conocimiento consolidado:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor'
+    });
+  }
+});
+
+// POST /api/areas/:id/consolidate - Consolidar conocimiento de un área con IA
+router.post('/:id/consolidate', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('🤖 Consolidando conocimiento del área:', id);
+
+    // Obtener el área y verificar permisos
+    const area = await Area.findById(id)
+      .populate('projectId', 'name userId');
+
+    if (!area) {
+      return res.status(404).json({
+        success: false,
+        error: 'Área no encontrada'
+      });
+    }
+
+    // Verificar que el usuario tenga acceso
+    if (area.projectId.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        error: 'No tienes acceso a esta área'
+      });
+    }
+
+    // Obtener todo el conocimiento asignado a esta área
+    const Knowledge = require('../models/Knowledge');
+    const knowledgeItems = await Knowledge.find({
+      areas: id
+    }).lean();
+
+    if (knowledgeItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No hay conocimiento asignado a esta área para consolidar'
+      });
+    }
+
+    console.log(`📚 Encontrados ${knowledgeItems.length} elementos de conocimiento para consolidar`);
+
+    // Preparar el contenido para el prompt
+    const knowledgeSources = knowledgeItems.map(item => {
+      let source = `**${item.title}**\n`;
+      if (item.sourceType === 'upload' && item.fileInfo?.originalName) {
+        source += `(Archivo: ${item.fileInfo.originalName})\n`;
+      }
+      source += `${item.content}\n`;
+      if (item.notes) {
+        source += `Notas: ${item.notes}\n`;
+      }
+      return source;
+    }).join('\n---\n\n');
+
+    // Importar el prompt y la función de Gemini desde utilidades del backend
+    const { CONSOLIDATE_AREA_KNOWLEDGE_PROMPT } = require('../utils/prompts');
+    const { generateContentWithRetry } = require('../utils/geminiClient');
+
+    // Construir el prompt final
+    const finalPrompt = CONSOLIDATE_AREA_KNOWLEDGE_PROMPT + '\n\n**CONOCIMIENTO A CONSOLIDAR:**\n\n' + knowledgeSources;
+
+    console.log('🧠 Enviando prompt a Gemini para consolidación...');
+
+    // Generar contenido consolidado con Gemini (con reintentos)
+    const consolidatedContent = await generateContentWithRetry(finalPrompt);
+
+    console.log('✅ Contenido consolidado generado por IA');
+
+    // Guardar el conocimiento consolidado en el área
+    area.consolidatedKnowledge = {
+      content: consolidatedContent,
+      aiGenerated: true,
+      validated: false,
+      originalSourcesCount: knowledgeItems.length,
+      generatedAt: new Date(),
+      validatedAt: null
+    };
+
+    await area.save();
+
+    console.log('💾 Conocimiento consolidado guardado en el área');
+
+    res.json({
+      success: true,
+      consolidatedKnowledge: {
+        id: area._id.toString() + '_consolidated',
+        area_id: area._id.toString(),
+        content: consolidatedContent,
+        ai_generated: true,
+        validated: false,
+        original_sources_count: knowledgeItems.length,
+        created_at: area.consolidatedKnowledge.generatedAt,
+        updated_at: area.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error consolidando conocimiento:', error);
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de área inválido'
       });
     }
     

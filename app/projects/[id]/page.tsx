@@ -4,7 +4,20 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
-import { authenticatedFetchMongo } from '@/lib/supabase/client';
+import { authenticatedFetch } from '@/lib/supabase/client';
+
+// Interfaces
+interface Project {
+  id: string;
+  name: string;
+  description: string;
+  current_step: number;
+  step_1_completed: boolean;
+  step_2_completed: boolean;
+  step_3_completed: boolean;
+  step_4_completed: boolean;
+  created_at: string;
+}
 
 interface Area {
   id: string;
@@ -33,93 +46,146 @@ interface Knowledge {
   }[];
 }
 
-interface Project {
+interface ConsolidatedKnowledge {
   id: string;
-  name: string;
-  description: string;
-  status: string;
+  area_id: string;
+  content: string;
+  ai_generated: boolean;
+  validated: boolean;
+  original_sources_count: number;
   created_at: string;
+  updated_at: string;
+}
+
+interface AnalysisAsIs {
+  id: string;
+  project_id: string;
+  strategy_governance: string;
+  processes_operations: string;
+  technology_infrastructure: string;
+  data_information: string;
+  people_culture: string;
+  customer_experience: string;
+  conclusions: string;
+  ai_generated: boolean;
+  validated: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ProjectRecommendation {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  justification: string;
+  category: 'technological' | 'training' | 'cultural' | 'methodological';
+  priority: number;
+  status: 'proposed' | 'accepted' | 'rejected' | 'modified';
+  ai_generated: boolean;
+  validated: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ProjectSheet {
+  id: string;
+  recommendation_id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  expected_benefits: string;
+  strategic_objectives: string;
+  human_resources: string;
+  technological_resources: string;
+  estimated_investment: number;
+  estimated_duration: number;
+  involved_areas: string;
+  validated: boolean;
+  created_at: string;
+  updated_at: string;
+  project_recommendations?: {
+    id: string;
+    title: string;
+    category: string;
+    priority: number;
+    status: string;
+  };
 }
 
 const DEFAULT_COLORS = [
   '#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#F97316', '#06B6D4', '#84CC16',
-  '#EC4899', '#6366F1', '#14B8A6', '#F59E0B', '#8B5CF6', '#EF4444', '#10B981', '#06B6D4',
-  '#F97316', '#84CC16', '#EC4899', '#6366F1', '#14B8A6', '#DC2626', '#059669', '#7C3AED',
-  '#DB2777'
+  '#EC4899', '#6366F1', '#14B8A6', '#F59E0B', '#8B5CF6', '#EF4444', '#10B981', '#06B6D4'
 ];
 
-export default function ProjectPage({ params }: { params: { id: string } }) {
+export default function ProjectGuidedPage({ params }: { params: { id: string } }) {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const projectId = params.id;
 
-  // Estados del proyecto
+  // Estados principales
   const [project, setProject] = useState<Project | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
   const [knowledge, setKnowledge] = useState<Knowledge[]>([]);
+  const [consolidatedKnowledge, setConsolidatedKnowledge] = useState<{[areaId: string]: ConsolidatedKnowledge}>({});
   const [loading, setLoading] = useState(true);
 
-  // Estados de UI
-  const [activeTab, setActiveTab] = useState<'areas' | 'knowledge'>('areas');
+  // Estados del flujo guiado
+  const [currentStep, setCurrentStep] = useState(1);
+  const [notifications, setNotifications] = useState<{id: string, message: string, type: 'success' | 'error' | 'info'}[]>([]);
+
+  // Estados para Paso 1 - Gestión de Conocimiento Completa
   const [showCreateArea, setShowCreateArea] = useState(false);
-  const [showUploadKnowledge, setShowUploadKnowledge] = useState(false);
   const [showAddKnowledge, setShowAddKnowledge] = useState(false);
-  const [showAssignAreas, setShowAssignAreas] = useState(false);
-  const [showViewContent, setShowViewContent] = useState(false);
+  const [showUploadFile, setShowUploadFile] = useState(false);
+  const [showViewConsolidated, setShowViewConsolidated] = useState(false);
+  const [showViewKnowledge, setShowViewKnowledge] = useState(false);
+  const [selectedAreaForConsolidated, setSelectedAreaForConsolidated] = useState<Area | null>(null);
   const [selectedKnowledge, setSelectedKnowledge] = useState<Knowledge | null>(null);
-  const [showMultiUpload, setShowMultiUpload] = useState(false);
+  const [consolidatingArea, setConsolidatingArea] = useState<string | null>(null);
+  const [expandedAreaSources, setExpandedAreaSources] = useState<{[areaId: string]: boolean}>({});
 
-  // Función para obtener el siguiente color disponible
-  const getNextAvailableColor = () => {
-    const usedColors = areas.map(area => area.color);
-    const availableColor = DEFAULT_COLORS.find(color => !usedColors.includes(color));
-    return availableColor || DEFAULT_COLORS[0]; // Fallback al primer color si todos están usados
-  };
+  // Estados de Drag & Drop
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [dragTargetArea, setDragTargetArea] = useState<string | null>(null);
+  const [uploadingFiles, setUploadingFiles] = useState<{[fileName: string]: 'pending' | 'uploading' | 'success' | 'error'}>({});
 
-  // Función para contar conocimiento por área
-  const getKnowledgeCountByArea = (areaId: string) => {
-    return knowledge.filter(k => 
-      k.knowledge_areas && k.knowledge_areas.some(ka => ka.area_id === areaId)
-    ).length;
-  };
+  // Estados para el popup de asignación de áreas
+  const [showAssignAreasModal, setShowAssignAreasModal] = useState(false);
+  const [pendingKnowledgeAssignments, setPendingKnowledgeAssignments] = useState<Knowledge[]>([]);
+  const [knowledgeAreaAssignments, setKnowledgeAreaAssignments] = useState<{[knowledgeId: string]: string}>({});
 
-  // Funciones para notificaciones
-  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-    const id = Date.now().toString();
-    setNotifications(prev => [...prev, { id, message, type }]);
-    
-    // Auto-eliminar después de 5 segundos
-    setTimeout(() => {
-      setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 5000);
-  };
+  // Estados para Paso 2 - AS IS Analysis
+  const [analysisAsIs, setAnalysisAsIs] = useState<AnalysisAsIs | null>(null);
+  const [generatingAnalysis, setGeneratingAnalysis] = useState(false);
+  const [editingAnalysis, setEditingAnalysis] = useState(false);
+  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+  const [analysisEditData, setAnalysisEditData] = useState<Partial<AnalysisAsIs>>({});
 
-  const removeNotification = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  };
+  // Estados para Paso 3 - Recommendations
+  const [recommendations, setRecommendations] = useState<ProjectRecommendation[]>([]);
+  const [generatingRecommendations, setGeneratingRecommendations] = useState(false);
+  const [showRecommendationModal, setShowRecommendationModal] = useState(false);
+  const [selectedRecommendation, setSelectedRecommendation] = useState<ProjectRecommendation | null>(null);
+
+  // Estados para Paso 4 - Project Sheets
+  const [projectSheets, setProjectSheets] = useState<ProjectSheet[]>([]);
+  const [generatingSheets, setGeneratingSheets] = useState(false);
+  const [showSheetModal, setShowSheetModal] = useState(false);
+  const [selectedSheet, setSelectedSheet] = useState<ProjectSheet | null>(null);
 
   // Estados de formularios
   const [newArea, setNewArea] = useState({ name: '', description: '', color: '' });
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadTitle, setUploadTitle] = useState('');
   const [manualTitle, setManualTitle] = useState('');
   const [manualContent, setManualContent] = useState('');
   const [manualNotes, setManualNotes] = useState('');
   const [selectedAreaId, setSelectedAreaId] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadTitle, setUploadTitle] = useState('');
   const [isCreating, setIsCreating] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
-  const [isAssigning, setIsAssigning] = useState(false);
-  const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
-
-  // Estados para subida múltiple
-  const [multiFiles, setMultiFiles] = useState<{file: File, areaId: string, title: string}[]>([]);
-  const [isDragOver, setIsDragOver] = useState(false);
-  const [isMultiUploading, setIsMultiUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{[key: string]: 'pending' | 'uploading' | 'success' | 'error'}>({});
-
-  // Estados para notificaciones
-  const [notifications, setNotifications] = useState<{id: string, message: string, type: 'success' | 'error' | 'info'}[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Verificar autenticación
   useEffect(() => {
@@ -139,69 +205,120 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     try {
       setLoading(true);
       
-      // Cargar proyecto desde backend MongoDB
-      const projectResponse = await authenticatedFetchMongo(`/projects/${projectId}`);
+      // Cargar proyecto con información de pasos
+      const projectResponse = await authenticatedFetch(`/api/projects/${projectId}`);
       if (!projectResponse.ok) {
         throw new Error('Project not found');
       }
       const projectData = await projectResponse.json();
-      setProject(projectData.project || projectData);
+      setProject(projectData);
+      setCurrentStep(projectData.current_step || 1);
 
-      // Cargar áreas desde backend MongoDB
-      const areasResponse = await authenticatedFetchMongo(`/areas?projectId=${projectId}`);
+      // Cargar áreas
+      const areasResponse = await authenticatedFetch(`/api/areas?projectId=${projectId}`);
       if (areasResponse.ok) {
         const areasData = await areasResponse.json();
-        const areasFormatted = (areasData.areas || areasData).map((area: any) => ({
-          id: area._id,
-          name: area.name,
-          description: area.description,
-          color: area.color,
-          created_at: area.createdAt
-        }));
-        setAreas(areasFormatted);
+        console.log('📍 Áreas cargadas desde el backend:', areasData);
+        // Verificación defensiva: asegurar que siempre sea un array
+        const safeAreasData = Array.isArray(areasData) ? areasData : [];
+        console.log('📍 Áreas después de verificación:', safeAreasData);
+        setAreas(safeAreasData);
+      } else {
+        console.error('❌ Error cargando áreas:', areasResponse.status);
+        // Si la respuesta no es ok, asegurar que areas sea un array vacío
+        setAreas([]);
       }
 
-      // Cargar conocimiento desde backend MongoDB
-      const knowledgeResponse = await authenticatedFetchMongo(`/knowledge?projectId=${projectId}`);
+      // Cargar conocimiento
+      const knowledgeResponse = await authenticatedFetch(`/api/knowledge?projectId=${projectId}`);
       if (knowledgeResponse.ok) {
         const knowledgeData = await knowledgeResponse.json();
-        const rawKnowledge = knowledgeData.knowledge || knowledgeData;
-        // Mapear datos de MongoDB al formato esperado por el frontend
-        const knowledgeWithAreas = rawKnowledge.map((k: any) => ({
-          id: k._id,
-          title: k.title,
-          content: k.content,
-          source_type: k.sourceType,
-          file_name: k.fileInfo?.originalName,
-          file_size: k.fileInfo?.fileSize,
-          notes: k.notes,
-          uploaded_at: k.createdAt,
-          knowledge_areas: (k.areas || []).map((area: any) => ({
-            area_id: area._id,
-            areas: {
-              id: area._id,
-              name: area.name,
-              color: area.color
-            }
-          }))
+        // Verificación defensiva: asegurar que siempre sea un array
+        const safeKnowledgeData = Array.isArray(knowledgeData) ? knowledgeData : [];
+        const knowledgeWithAreas = safeKnowledgeData.map((k: any) => ({
+          ...k,
+          knowledge_areas: k.knowledge_areas || []
         }));
         setKnowledge(knowledgeWithAreas);
+      } else {
+        // Si la respuesta no es ok, asegurar que knowledge sea un array vacío
+        setKnowledge([]);
+      }
+
+      // Cargar conocimiento consolidado
+      const consolidatedResponse = await authenticatedFetch(`/api/areas/consolidated?projectId=${projectId}`);
+      if (consolidatedResponse.ok) {
+        const consolidatedData = await consolidatedResponse.json();
+        // Verificación defensiva: asegurar que siempre sea un array
+        const safeConsolidatedData = Array.isArray(consolidatedData) ? consolidatedData : [];
+        const consolidatedMap: {[areaId: string]: ConsolidatedKnowledge} = {};
+        safeConsolidatedData.forEach((item: ConsolidatedKnowledge) => {
+          consolidatedMap[item.area_id] = item;
+        });
+        setConsolidatedKnowledge(consolidatedMap);
+      } else {
+        // Si la respuesta no es ok, asegurar que consolidatedKnowledge sea un objeto vacío
+        setConsolidatedKnowledge({});
       }
 
     } catch (error) {
       console.error('Error loading project data:', error);
-      alert('Error cargando el proyecto');
+      showNotification('Error cargando los datos del proyecto', 'error');
     } finally {
       setLoading(false);
     }
   };
 
+  // Función para obtener el siguiente color disponible
+  const getNextAvailableColor = () => {
+    // Verificación defensiva: asegurar que areas sea un array válido
+    if (!Array.isArray(areas)) {
+      return DEFAULT_COLORS[0];
+    }
+    const usedColors = areas.map(area => area.color);
+    const availableColor = DEFAULT_COLORS.find(color => !usedColors.includes(color));
+    return availableColor || DEFAULT_COLORS[0];
+  };
+
+  // Función para contar conocimiento por área
+  const getKnowledgeCountByArea = (areaId: string) => {
+    // Verificación defensiva: asegurar que knowledge sea un array válido
+    if (!Array.isArray(knowledge)) return 0;
+    return knowledge.filter(k => 
+      k.knowledge_areas && k.knowledge_areas.some(ka => ka.area_id === areaId)
+    ).length;
+  };
+
+  // Función para obtener conocimiento por área
+  const getKnowledgeByArea = (areaId: string) => {
+    // Verificación defensiva: asegurar que knowledge sea un array válido
+    if (!Array.isArray(knowledge)) return [];
+    return knowledge.filter(k => 
+      k.knowledge_areas && k.knowledge_areas.some(ka => ka.area_id === areaId)
+    );
+  };
+
+  // Funciones para notificaciones
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Date.now().toString();
+    setNotifications(prev => [...prev, { id, message, type }]);
+    
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  };
+
+  const removeNotification = (id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  // Funciones de gestión de áreas
   const handleCreateArea = async () => {
     if (!newArea.name.trim()) return;
 
     setIsCreating(true);
     try {
-      const response = await authenticatedFetchMongo('/areas', {
+      const response = await authenticatedFetch('/api/areas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -214,103 +331,26 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         throw new Error('Error creating area');
       }
 
-      const areaResponse = await response.json();
-      const areaFormatted = {
-        id: areaResponse.area._id,
-        name: areaResponse.area.name,
-        description: areaResponse.area.description,
-        color: areaResponse.area.color,
-        created_at: areaResponse.area.createdAt
-      };
-      setAreas(prev => [...prev, areaFormatted]);
+      const area = await response.json();
+      setAreas(prev => [...prev, area]);
       setNewArea({ name: '', description: '', color: getNextAvailableColor() });
       setShowCreateArea(false);
+      showNotification(`Área "${area.name}" creada exitosamente`, 'success');
     } catch (error) {
       console.error('Error creating area:', error);
-      alert('Error creando el área');
+      showNotification('Error creando el área', 'error');
     } finally {
       setIsCreating(false);
     }
   };
 
-  const handleFileUpload = async () => {
-    if (!selectedFile) return;
-
-    setIsUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      formData.append('projectId', projectId);
-      formData.append('title', uploadTitle || selectedFile.name);
-
-      const response = await authenticatedFetchMongo('/knowledge', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Error uploading file');
-      }
-
-      const newKnowledge = await response.json();
-
-      // Si se asignó un área, asignarla
-      if (selectedAreaId) {
-        const assignResponse = await authenticatedFetchMongo(`/knowledge/${newKnowledge.knowledge._id}/assign-areas`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ areaIds: [selectedAreaId] }),
-        });
-
-        if (assignResponse.ok) {
-          // Actualizar el conocimiento con las áreas asignadas
-          const areaData = areas.find(a => a.id === selectedAreaId);
-          if (areaData) {
-            newKnowledge.knowledge.knowledge_areas = [{
-              area_id: selectedAreaId,
-              areas: {
-                id: areaData.id,
-                name: areaData.name,
-                color: areaData.color
-              }
-            }];
-          }
-        }
-      }
-
-      // Mapear la estructura de MongoDB al formato frontend
-      const mappedKnowledge = {
-        id: newKnowledge.knowledge._id,
-        title: newKnowledge.knowledge.title,
-        content: newKnowledge.knowledge.content,
-        source_type: newKnowledge.knowledge.sourceType,
-        file_name: newKnowledge.knowledge.fileInfo?.originalName,
-        file_size: newKnowledge.knowledge.fileInfo?.fileSize,
-        notes: newKnowledge.knowledge.notes,
-        uploaded_at: newKnowledge.knowledge.createdAt,
-        knowledge_areas: newKnowledge.knowledge.knowledge_areas || []
-      };
-      
-      setKnowledge(prev => [mappedKnowledge, ...prev]);
-      setSelectedFile(null);
-      setUploadTitle('');
-      setShowUploadKnowledge(false);
-      showNotification('Archivo subido exitosamente', 'success');
-    } catch (error) {
-      console.error('Error uploading file:', error);
-      showNotification(`Error subiendo archivo: ${error instanceof Error ? error.message : 'Error desconocido'}`, 'error');
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
+  // Funciones de gestión de conocimiento
   const handleAddManualKnowledge = async () => {
     if (!manualTitle.trim() || !manualContent.trim()) return;
 
     setIsAdding(true);
     try {
-      const response = await authenticatedFetchMongo('/knowledge', {
+      const response = await authenticatedFetch('/api/knowledge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -327,24 +367,12 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         throw new Error(error.error || 'Error adding knowledge');
       }
 
-      const knowledgeResponse = await response.json();
-      const knowledgeFormatted = {
-        id: knowledgeResponse.knowledge._id,
-        title: knowledgeResponse.knowledge.title,
-        content: knowledgeResponse.knowledge.content,
-        source_type: knowledgeResponse.knowledge.sourceType,
-        notes: knowledgeResponse.knowledge.notes,
-        uploaded_at: knowledgeResponse.knowledge.createdAt,
-        knowledge_areas: (knowledgeResponse.knowledge.areas || []).map((area: any) => ({
-          area_id: area._id,
-          areas: {
-            id: area._id,
-            name: area.name,
-            color: area.color
-          }
-        }))
+      const newKnowledge = await response.json();
+      const knowledgeWithAreas = {
+        ...newKnowledge,
+        knowledge_areas: newKnowledge.knowledge_areas || []
       };
-      setKnowledge(prev => [knowledgeFormatted, ...prev]);
+      setKnowledge(prev => [knowledgeWithAreas, ...prev]);
       setManualTitle('');
       setManualContent('');
       setManualNotes('');
@@ -359,91 +387,198 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     }
   };
 
-  const handleDeleteArea = async (areaId: string) => {
-    if (!confirm('¿Estás seguro de eliminar esta área?')) return;
+  const handleFileUpload = async () => {
+    if (!selectedFile) return;
 
+    setIsUploading(true);
     try {
-      const response = await authenticatedFetchMongo(`/areas/${areaId}`, {
-        method: 'DELETE',
-      });
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('projectId', projectId);
+      formData.append('title', uploadTitle || selectedFile.name);
 
-      if (!response.ok) {
-        throw new Error('Error deleting area');
-      }
-
-      setAreas(prev => prev.filter(area => area.id !== areaId));
-    } catch (error) {
-      console.error('Error deleting area:', error);
-      alert('Error eliminando el área');
-    }
-  };
-
-  const handleAssignAreas = (knowledge: Knowledge) => {
-    setSelectedKnowledge(knowledge);
-    // Inicializar con las áreas ya asignadas
-    const currentAreaIds = (knowledge.knowledge_areas || []).map((ka: any) => ka.area_id);
-    setSelectedAreas(currentAreaIds);
-    setShowAssignAreas(true);
-  };
-
-  const handleSaveAreaAssignments = async () => {
-    if (!selectedKnowledge) return;
-
-    setIsAssigning(true);
-    try {
-      const response = await authenticatedFetchMongo(`/knowledge/${selectedKnowledge.id}/assign-areas`, {
+      const response = await authenticatedFetch('/api/knowledge', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          areaIds: selectedAreas
-        }),
+        body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('Error asignando áreas');
+        const error = await response.json();
+        throw new Error(error.error || 'Error uploading file');
       }
 
-      // Recargar datos del proyecto para reflejar los cambios
-      await loadProjectData();
-      
-      setShowAssignAreas(false);
-      setSelectedKnowledge(null);
-      setSelectedAreas([]);
-      alert('Áreas asignadas exitosamente');
+      const newKnowledge = await response.json();
+      const knowledgeWithAreas = {
+        ...newKnowledge,
+        knowledge_areas: newKnowledge.knowledge_areas || []
+      };
+
+      // Si se seleccionó un área, asignarla
+      if (selectedAreaId) {
+        const assignResponse = await authenticatedFetch(`/api/knowledge/${newKnowledge.id}/assign-areas`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ areaIds: [selectedAreaId] }),
+        });
+
+        if (assignResponse.ok) {
+                  const areaData = Array.isArray(areas) ? areas.find(a => a.id === selectedAreaId) : undefined;
+          if (areaData) {
+          knowledgeWithAreas.knowledge_areas = [{
+              area_id: selectedAreaId,
+              areas: {
+                id: areaData.id,
+                name: areaData.name,
+                color: areaData.color
+              }
+            }];
+          }
+        }
+      }
+
+      setKnowledge(prev => [knowledgeWithAreas, ...prev]);
+      setSelectedFile(null);
+      setUploadTitle('');
+      setSelectedAreaId('');
+      setShowUploadFile(false);
+      showNotification('Archivo subido exitosamente', 'success');
     } catch (error) {
-      console.error('Error assigning areas:', error);
-      alert(`Error asignando áreas: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+      console.error('Error uploading file:', error);
+      showNotification(`Error subiendo archivo: ${error instanceof Error ? error.message : 'Error desconocido'}`, 'error');
     } finally {
-      setIsAssigning(false);
+      setIsUploading(false);
     }
   };
 
-  const toggleAreaSelection = (areaId: string) => {
-    setSelectedAreas(prev => 
-      prev.includes(areaId) 
-        ? prev.filter(id => id !== areaId)
-        : [...prev, areaId]
+  // Funciones de Drag & Drop
+  const handleDragOver = (e: React.DragEvent, areaId?: string) => {
+    e.preventDefault();
+    setIsDragOver(true);
+    if (areaId) {
+      setDragTargetArea(areaId);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    setDragTargetArea(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, areaId?: string) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    setDragTargetArea(null);
+    
+    // Solo permitir drop en la zona general, NO en áreas específicas
+    if (areaId) {
+      showNotification('Los archivos se deben arrastrar a la zona general para asignarlos después', 'info');
+      return;
+    }
+
+    const files = Array.from(e.dataTransfer.files).filter(file => 
+      file.type === 'text/plain' || 
+      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     );
+
+    if (files.length === 0) {
+      showNotification('Por favor, arrastra solo archivos .txt o .docx', 'error');
+      return;
+    }
+
+    // Subir archivos en paralelo
+    const uploadPromises = files.map(async (file) => {
+      try {
+        setUploadingFiles(prev => ({ ...prev, [file.name]: 'uploading' }));
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('projectId', projectId);
+        formData.append('title', file.name.replace(/\.[^/.]+$/, ''));
+
+        const response = await authenticatedFetch('/api/knowledge', {
+        method: 'POST',
+          body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+          throw new Error(error.error || 'Error uploading file');
+        }
+
+        const newKnowledge = await response.json();
+        console.log('📋 Datos del conocimiento recibido:', {
+          id: newKnowledge.id,
+          title: newKnowledge.title,
+          hasContent: !!newKnowledge.content,
+          contentLength: newKnowledge.content ? newKnowledge.content.length : 'undefined',
+          fullObject: newKnowledge
+        });
+        
+        const knowledgeWithAreas = {
+          ...newKnowledge,
+          knowledge_areas: newKnowledge.knowledge_areas || []
+        };
+
+        setUploadingFiles(prev => ({ ...prev, [file.name]: 'success' }));
+        return knowledgeWithAreas;
+    } catch (error) {
+        console.error(`Error uploading file ${file.name}:`, error);
+        setUploadingFiles(prev => ({ ...prev, [file.name]: 'error' }));
+        throw error;
+      }
+    });
+
+    try {
+      const results = await Promise.allSettled(uploadPromises);
+      const successfulUploads = results
+        .filter((result): result is PromiseFulfilledResult<Knowledge> => result.status === 'fulfilled')
+        .map(result => result.value);
+
+      if (successfulUploads.length > 0) {
+        // Actualizar lista de conocimiento
+        setKnowledge(prev => [...successfulUploads, ...prev]);
+        
+        // Preparar popup de asignación de áreas
+        setPendingKnowledgeAssignments(successfulUploads);
+        
+        // Inicializar asignaciones con valores vacíos
+        const initialAssignments: {[knowledgeId: string]: string} = {};
+        successfulUploads.forEach(knowledge => {
+          initialAssignments[knowledge.id] = '';
+        });
+        setKnowledgeAreaAssignments(initialAssignments);
+        
+        // Mostrar popup de asignación
+        setShowAssignAreasModal(true);
+      }
+
+      const failedCount = results.filter(result => result.status === 'rejected').length;
+      
+      if (failedCount > 0) {
+        showNotification(`${successfulUploads.length} archivos subidos correctamente, ${failedCount} fallaron.`, 'info');
+      }
+
+    } catch (error) {
+      showNotification('Error en la subida de archivos', 'error');
+    } finally {
+      // Limpiar estados de subida después de un delay
+      setTimeout(() => {
+        setUploadingFiles({});
+      }, 3000);
+    }
   };
 
-  const handleViewContent = (knowledge: Knowledge) => {
-    setSelectedKnowledge(knowledge);
-    setShowViewContent(true);
-  };
-
-  const handleDeleteKnowledge = async (knowledge: Knowledge) => {
+  const handleDeleteKnowledge = async (knowledgeItem: Knowledge) => {
     const confirmDelete = confirm(
-      `¿Estás seguro de que quieres eliminar "${knowledge.title}"?\n\n` +
-      `Esta acción no se puede deshacer y eliminará:\n` +
-      `- El conocimiento de la base de datos\n` +
-      `- El archivo del sistema (si existe)\n` +
-      `- Todas las asignaciones de áreas`
+      `¿Estás seguro de que quieres eliminar "${knowledgeItem.title}"?\n\n` +
+      `Esta acción no se puede deshacer.`
     );
 
     if (!confirmDelete) return;
 
     try {
-      const response = await authenticatedFetchMongo(`/knowledge/${knowledge.id}`, {
+      const response = await authenticatedFetch(`/api/knowledge/${knowledgeItem.id}`, {
         method: 'DELETE',
       });
 
@@ -452,9 +587,8 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         throw new Error(error.error || 'Error eliminando conocimiento');
       }
 
-      // Remover el conocimiento de la lista local
-      setKnowledge(prev => prev.filter(k => k.id !== knowledge.id));
-      showNotification(`"${knowledge.title}" eliminado exitosamente`, 'success');
+      setKnowledge(prev => prev.filter(k => k.id !== knowledgeItem.id));
+      showNotification(`"${knowledgeItem.title}" eliminado exitosamente`, 'success');
       
     } catch (error) {
       console.error('Error deleting knowledge:', error);
@@ -462,251 +596,416 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     }
   };
 
-  const handleDeleteAllKnowledge = async () => {
-    if (knowledge.length === 0) {
-      showNotification('No hay conocimiento para eliminar', 'info');
-      return;
-    }
+  const toggleAreaSources = (areaId: string) => {
+    setExpandedAreaSources(prev => ({
+      ...prev,
+      [areaId]: !prev[areaId]
+    }));
+  };
 
-    const confirmDelete = confirm(
-      `⚠️ ATENCIÓN: ¿Estás seguro de que quieres eliminar TODO el conocimiento de este proyecto?\n\n` +
-      `Esta acción eliminará ${knowledge.length} elementos de conocimiento y:\n` +
-      `- Todos los registros de la base de datos\n` +
-      `- Todos los archivos del sistema\n` +
-      `- Todas las asignaciones de áreas\n\n` +
-      `Esta acción NO SE PUEDE DESHACER.`
-    );
+  const handleViewKnowledge = (knowledgeItem: Knowledge) => {
+    setSelectedKnowledge(knowledgeItem);
+    setShowViewKnowledge(true);
+  };
 
-    if (!confirmDelete) return;
-
+  // Función de consolidación de área
+  const handleConsolidateArea = async (area: Area) => {
+    setConsolidatingArea(area.id);
     try {
-      const response = await authenticatedFetchMongo(`/knowledge/delete-all?projectId=${projectId}`, {
-        method: 'DELETE',
+      const response = await authenticatedFetch(`/api/areas/${area.id}/consolidate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Error eliminando conocimiento');
+        throw new Error(error.error || 'Error consolidating area');
       }
 
-      const result = await response.json();
-      
-      // Limpiar la lista local
-      setKnowledge([]);
-      showNotification(
-        `${result.deletedCount} elementos de conocimiento eliminados exitosamente` + 
-        (result.filesDeleted > 0 ? ` (${result.filesDeleted} archivos eliminados)` : ''), 
-        'success'
-      );
-      
+      const consolidatedData = await response.json();
+      setConsolidatedKnowledge(prev => ({
+        ...prev,
+        [area.id]: consolidatedData
+      }));
+
+      showNotification(`Área "${area.name}" consolidada exitosamente`, 'success');
     } catch (error) {
-      console.error('Error deleting all knowledge:', error);
-      showNotification(`Error eliminando conocimiento: ${error instanceof Error ? error.message : 'Error desconocido'}`, 'error');
+      console.error('Error consolidating area:', error);
+      showNotification(`Error consolidando área: ${error instanceof Error ? error.message : 'Error desconocido'}`, 'error');
+    } finally {
+      setConsolidatingArea(null);
     }
   };
 
-  // Funciones para subida múltiple
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
+  const handleViewConsolidated = (area: Area) => {
+    setSelectedAreaForConsolidated(area);
+    setShowViewConsolidated(true);
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    
-    const files = Array.from(e.dataTransfer.files).filter(file => 
-      file.type === 'text/plain' || 
-      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      file.type === 'application/pdf'
-    );
-
-    if (files.length === 0) {
-      alert('Por favor, arrastra solo archivos .txt, .docx o .pdf');
-      return;
-    }
-
-    // Verificar tamaño de archivos (advertir si son > 5MB)
-    const largeFiles = files.filter(file => file.size > 5 * 1024 * 1024);
-    if (largeFiles.length > 0) {
-      const fileNames = largeFiles.map(f => f.name).join(', ');
-      if (!confirm(`Los siguientes archivos son muy grandes (>${5} MB):\n\n${fileNames}\n\nLa subida puede tardar más tiempo. ¿Continuar?`)) {
-        return;
-      }
-    }
-
-    const newFiles = files.map(file => ({
-      file,
-      areaId: '',
-      title: file.name.replace(/\.[^/.]+$/, '') // Remover extensión
+  // Funciones del popup de asignación de áreas
+  const handleAssignmentChange = (knowledgeId: string, areaId: string) => {
+    setKnowledgeAreaAssignments(prev => ({
+      ...prev,
+      [knowledgeId]: areaId
     }));
-
-    setMultiFiles(newFiles);
-    setUploadProgress({});
-    setShowMultiUpload(true);
   };
 
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-    
-    const files = Array.from(e.target.files).filter(file => 
-      file.type === 'text/plain' || 
-      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      file.type === 'application/pdf'
-    );
-
-    if (files.length === 0) {
-      alert('Por favor, selecciona solo archivos .txt, .docx o .pdf');
-      return;
-    }
-
-    // Verificar tamaño de archivos (advertir si son > 5MB)
-    const largeFiles = files.filter(file => file.size > 5 * 1024 * 1024);
-    if (largeFiles.length > 0) {
-      const fileNames = largeFiles.map(f => f.name).join(', ');
-      if (!confirm(`Los siguientes archivos son muy grandes (>${5} MB):\n\n${fileNames}\n\nLa subida puede tardar más tiempo. ¿Continuar?`)) {
-        return;
-      }
-    }
-
-    const newFiles = files.map(file => ({
-      file,
-      areaId: '',
-      title: file.name.replace(/\.[^/.]+$/, '') // Remover extensión
-    }));
-
-    setMultiFiles(newFiles);
-    setUploadProgress({});
-    setShowMultiUpload(true);
-  };
-
-  const updateFileTitle = (index: number, title: string) => {
-    setMultiFiles(prev => prev.map((item, i) => 
-      i === index ? { ...item, title } : item
-    ));
-  };
-
-  const updateFileArea = (index: number, areaId: string) => {
-    setMultiFiles(prev => prev.map((item, i) => 
-      i === index ? { ...item, areaId } : item
-    ));
-  };
-
-  const removeFile = (index: number) => {
-    setMultiFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleMultiUpload = async () => {
-    if (multiFiles.length === 0) return;
-
-    setIsMultiUploading(true);
-    const initialProgress: {[key: string]: 'pending' | 'uploading' | 'success' | 'error'} = {};
-    multiFiles.forEach((_, index) => {
-      initialProgress[index] = 'pending';
-    });
-    setUploadProgress(initialProgress);
-
+  const handleConfirmAssignments = async () => {
     try {
-      // Subir archivos en paralelo
-      const uploadPromises = multiFiles.map(async (fileData, index) => {
-        try {
-          setUploadProgress(prev => ({ ...prev, [index]: 'uploading' }));
-
-          const formData = new FormData();
-          formData.append('file', fileData.file);
-          formData.append('projectId', projectId);
-          formData.append('title', fileData.title);
-
-          const response = await authenticatedFetchMongo('/knowledge', {
+      console.log('🔄 Iniciando asignaciones de áreas...');
+      console.log('📋 Pending assignments:', pendingKnowledgeAssignments);
+      console.log('📋 Area assignments:', knowledgeAreaAssignments);
+      console.log('📍 Available areas:', areas);
+      
+      const assignmentPromises = pendingKnowledgeAssignments.map(async (knowledge) => {
+        const areaId = knowledgeAreaAssignments[knowledge.id];
+        console.log(`🔗 Asignando knowledge ${knowledge.id} a área ${areaId}`);
+        
+        if (areaId) {
+          const response = await authenticatedFetch(`/api/knowledge/${knowledge.id}/assign-areas`, {
             method: 'POST',
-            body: formData,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ areaIds: [areaId] }),
           });
 
-          if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Error uploading file');
-          }
-
-          const newKnowledge = await response.json();
-
-          // Si se asignó un área, asignarla
-          if (fileData.areaId) {
-            const assignResponse = await authenticatedFetchMongo(`/knowledge/${newKnowledge.knowledge._id}/assign-areas`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ areaIds: [fileData.areaId] }),
-            });
-
-            if (assignResponse.ok) {
-              // Actualizar el conocimiento con las áreas asignadas
-              const areaData = areas.find(a => a.id === fileData.areaId);
-              if (areaData) {
-                newKnowledge.knowledge.knowledge_areas = [{
-                  area_id: fileData.areaId,
+          if (response.ok) {
+            const areaData = areas.find(a => a.id === areaId);
+            if (areaData) {
+              return {
+                ...knowledge,
+                knowledge_areas: [{
+                  area_id: areaId,
                   areas: {
                     id: areaData.id,
                     name: areaData.name,
                     color: areaData.color
                   }
-                }];
-              }
+                }]
+              };
             }
           }
-
-          setUploadProgress(prev => ({ ...prev, [index]: 'success' }));
-          
-          // Mapear la estructura de MongoDB al formato frontend
-          const mappedKnowledge = {
-            id: newKnowledge.knowledge._id,
-            title: newKnowledge.knowledge.title,
-            content: newKnowledge.knowledge.content,
-            source_type: newKnowledge.knowledge.sourceType,
-            file_name: newKnowledge.knowledge.fileInfo?.originalName,
-            file_size: newKnowledge.knowledge.fileInfo?.fileSize,
-            notes: newKnowledge.knowledge.notes,
-            uploaded_at: newKnowledge.knowledge.createdAt,
-            knowledge_areas: newKnowledge.knowledge.knowledge_areas || []
-          };
-          
-          return mappedKnowledge;
-        } catch (error) {
-          console.error(`Error uploading file ${index}:`, error);
-          setUploadProgress(prev => ({ ...prev, [index]: 'error' }));
-          throw error;
         }
+        return knowledge;
       });
 
-      const results = await Promise.allSettled(uploadPromises);
-      const successfulUploads = results
-        .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
-        .map(result => result.value);
-
-      // Actualizar lista de conocimiento con las subidas exitosas
-      if (successfulUploads.length > 0) {
-        setKnowledge(prev => [...successfulUploads, ...prev]);
-      }
-
-      const failedCount = results.filter(result => result.status === 'rejected').length;
+      const updatedKnowledge = await Promise.all(assignmentPromises);
       
-      if (failedCount === 0) {
-        showNotification(`¡${successfulUploads.length} archivos subidos exitosamente!`, 'success');
-        setShowMultiUpload(false);
-        setMultiFiles([]);
-        setUploadProgress({});
+      // Actualizar la lista de conocimiento con las asignaciones
+      setKnowledge(prev => {
+        const newKnowledge = [...prev];
+        updatedKnowledge.forEach(updated => {
+          const index = newKnowledge.findIndex(k => k.id === updated.id);
+          if (index !== -1) {
+            newKnowledge[index] = updated;
+          }
+        });
+        return newKnowledge;
+      });
+
+      // Cerrar popup
+      setShowAssignAreasModal(false);
+      setPendingKnowledgeAssignments([]);
+      setKnowledgeAreaAssignments({});
+
+      // Mostrar notificación de éxito
+      const assignedCount = Object.values(knowledgeAreaAssignments).filter(areaId => areaId).length;
+      if (assignedCount > 0) {
+        showNotification(`¡${assignedCount} archivos asignados exitosamente!`, 'success');
       } else {
-        showNotification(`${successfulUploads.length} archivos subidos correctamente, ${failedCount} fallaron.`, 'info');
+        showNotification('Archivos subidos sin asignar a áreas', 'info');
+      }
+      
+    } catch (error) {
+      console.error('Error assigning areas:', error);
+      showNotification('Error asignando áreas al conocimiento', 'error');
+    }
+  };
+
+  const handleSkipAssignments = () => {
+    setShowAssignAreasModal(false);
+    setPendingKnowledgeAssignments([]);
+    setKnowledgeAreaAssignments({});
+    showNotification('Archivos subidos sin asignar a áreas', 'info');
+  };
+
+  // Funciones de progreso
+  const getStepProgress = () => {
+    let completed = 0;
+    if (project?.step_1_completed) completed += 25;
+    if (project?.step_2_completed) completed += 25;
+    if (project?.step_3_completed) completed += 25;
+    if (project?.step_4_completed) completed += 25;
+    return completed;
+  };
+
+  const getStep1Completion = () => {
+    // Verificación defensiva: asegurar que areas sea un array válido
+    if (!Array.isArray(areas) || areas.length === 0) return 0;
+    
+    const areasWithKnowledge = areas.filter(area => getKnowledgeCountByArea(area.id) > 0);
+    const areasWithConsolidation = areas.filter(area => consolidatedKnowledge[area.id]);
+    
+    const knowledgeProgress = (areasWithKnowledge.length / areas.length) * 50;
+    const consolidationProgress = (areasWithConsolidation.length / areas.length) * 50;
+    
+    return knowledgeProgress + consolidationProgress;
+  };
+
+  // ========== FUNCIONES PASO 2: AS IS ANALYSIS ==========
+
+  const handleGenerateAnalysis = async () => {
+    try {
+      setGeneratingAnalysis(true);
+
+      const response = await authenticatedFetch(`/api/projects/${projectId}/analysis-as-is`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error generando análisis AS IS');
       }
 
-    } catch (error) {
-      console.error('Error in multi upload:', error);
-      showNotification('Error en la subida múltiple', 'error');
+      const analysisData = await response.json();
+      setAnalysisAsIs(analysisData);
+      showNotification('Análisis AS IS generado exitosamente', 'success');
+      
+    } catch (error: any) {
+      console.error('Error generando análisis:', error);
+      showNotification(error.message || 'Error generando análisis AS IS', 'error');
     } finally {
-      setIsMultiUploading(false);
+      setGeneratingAnalysis(false);
+    }
+  };
+
+  const handleEditAnalysis = () => {
+    if (analysisAsIs) {
+      setAnalysisEditData({
+        strategy_governance: analysisAsIs.strategy_governance || '',
+        processes_operations: analysisAsIs.processes_operations || '',
+        technology_infrastructure: analysisAsIs.technology_infrastructure || '',
+        data_information: analysisAsIs.data_information || '',
+        people_culture: analysisAsIs.people_culture || '',
+        customer_experience: analysisAsIs.customer_experience || '',
+        conclusions: analysisAsIs.conclusions || ''
+      });
+      setEditingAnalysis(true);
+      setShowAnalysisModal(true);
+    }
+  };
+
+  const handleSaveAnalysis = async () => {
+    try {
+      const response = await authenticatedFetch(`/api/projects/${projectId}/analysis-as-is`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(analysisEditData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error actualizando análisis AS IS');
+      }
+
+      const updatedAnalysis = await response.json();
+      setAnalysisAsIs(updatedAnalysis);
+      setShowAnalysisModal(false);
+      setEditingAnalysis(false);
+      showNotification('Análisis AS IS actualizado exitosamente', 'success');
+      
+    } catch (error: any) {
+      console.error('Error actualizando análisis:', error);
+      showNotification(error.message || 'Error actualizando análisis AS IS', 'error');
+    }
+  };
+
+  const handleValidateAnalysis = async () => {
+    try {
+      const response = await authenticatedFetch(`/api/projects/${projectId}/analysis-as-is`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ...analysisAsIs, validated: true }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error validando análisis AS IS');
+      }
+
+      const updatedAnalysis = await response.json();
+      setAnalysisAsIs(updatedAnalysis);
+      showNotification('Análisis AS IS validado exitosamente', 'success');
+      
+      // Avanzar al paso 3 automáticamente
+      await advanceStep(2);
+      
+    } catch (error: any) {
+      console.error('Error validando análisis:', error);
+      showNotification(error.message || 'Error validando análisis AS IS', 'error');
+    }
+  };
+
+  // ========== FUNCIONES PASO 3: RECOMMENDATIONS ==========
+
+  const handleGenerateRecommendations = async () => {
+    try {
+      setGeneratingRecommendations(true);
+
+      const response = await authenticatedFetch(`/api/projects/${projectId}/recommendations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error generando recomendaciones');
+      }
+
+      const recommendationsData = await response.json();
+      setRecommendations(recommendationsData);
+      showNotification('Recomendaciones generadas exitosamente', 'success');
+      
+    } catch (error: any) {
+      console.error('Error generando recomendaciones:', error);
+      showNotification(error.message || 'Error generando recomendaciones', 'error');
+    } finally {
+      setGeneratingRecommendations(false);
+    }
+  };
+
+  const handleUpdateRecommendationStatus = async (recommendationId: string, status: string) => {
+    try {
+      // Verificación defensiva: asegurar que recommendations sea un array válido
+      if (!Array.isArray(recommendations)) {
+        showNotification('Error: datos de recomendaciones no válidos', 'error');
+        return;
+      }
+      const updatedRecommendations = recommendations.map(rec => 
+        rec.id === recommendationId ? { ...rec, status } : rec
+      );
+
+      const response = await authenticatedFetch(`/api/projects/${projectId}/recommendations`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ recommendations: updatedRecommendations }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error actualizando recomendaciones');
+      }
+
+      const updatedData = await response.json();
+      setRecommendations(updatedData);
+      showNotification('Recomendación actualizada', 'success');
+      
+    } catch (error: any) {
+      console.error('Error actualizando recomendación:', error);
+      showNotification(error.message || 'Error actualizando recomendación', 'error');
+    }
+  };
+
+  const getAcceptedRecommendationsCount = () => {
+    // Verificación defensiva: asegurar que recommendations sea un array válido
+    if (!Array.isArray(recommendations)) return 0;
+    return recommendations.filter(rec => rec.status === 'accepted').length;
+  };
+
+  // ========== FUNCIONES PASO 4: PROJECT SHEETS ==========
+
+  const handleGenerateProjectSheets = async () => {
+    try {
+      setGeneratingSheets(true);
+
+      const response = await authenticatedFetch(`/api/projects/${projectId}/project-sheets`, {
+            method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+          });
+
+          if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error generando fichas de proyecto');
+      }
+
+      const sheetsData = await response.json();
+      setProjectSheets(sheetsData);
+      showNotification('Fichas de proyecto generadas exitosamente', 'success');
+      
+    } catch (error: any) {
+      console.error('Error generando fichas:', error);
+      showNotification(error.message || 'Error generando fichas de proyecto', 'error');
+    } finally {
+      setGeneratingSheets(false);
+    }
+  };
+
+  const handleValidateSheet = async (sheetId: string) => {
+    try {
+      const updatedSheets = projectSheets.map(sheet => 
+        sheet.id === sheetId ? { ...sheet, validated: true } : sheet
+      );
+
+      const response = await authenticatedFetch(`/api/projects/${projectId}/project-sheets`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ projectSheets: updatedSheets }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error validando ficha de proyecto');
+      }
+
+      const updatedData = await response.json();
+      setProjectSheets(updatedData);
+      showNotification('Ficha de proyecto validada', 'success');
+      
+    } catch (error: any) {
+      console.error('Error validando ficha:', error);
+      showNotification(error.message || 'Error validando ficha de proyecto', 'error');
+    }
+  };
+
+  // ========== FUNCIÓN GENERAL PARA AVANZAR PASOS ==========
+
+  const advanceStep = async (completedStep: number) => {
+    try {
+      const response = await authenticatedFetch(`/api/projects/${projectId}/advance-step`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ completedStep }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error avanzando paso');
+      }
+
+      const updatedProject = await response.json();
+      setProject(updatedProject);
+      setCurrentStep(updatedProject.current_step);
+      showNotification(`Paso ${completedStep} completado. Avanzando al paso ${updatedProject.current_step}`, 'success');
+      
+    } catch (error: any) {
+      console.error('Error avanzando paso:', error);
+      showNotification(error.message || 'Error avanzando paso', 'error');
     }
   };
 
@@ -742,8 +1041,13 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               </Link>
               <span className="mx-2 text-gray-400">/</span>
               <span className="text-gray-800 font-medium">{project.name}</span>
+              <span className="mx-2 text-gray-400">/</span>
+              <span className="text-blue-600 font-medium">Flujo Guiado</span>
             </div>
             <div className="flex items-center space-x-4">
+              <Link href={`/projects/${projectId}`} className="text-gray-600 hover:text-gray-800">
+                Vista Clásica
+              </Link>
               <span className="text-sm text-gray-600">{user.email}</span>
               <Link href="/dashboard" className="text-blue-600 hover:text-blue-800">
                 Volver al Dashboard
@@ -753,129 +1057,203 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         </div>
       </nav>
 
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Flujo Principal de Consultoría */}
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg shadow-lg p-6 mb-8 text-white">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="bg-white bg-opacity-20 rounded-full p-3">
-                <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
-                </svg>
-              </div>
+      {/* Progress Header */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-2xl font-bold mb-2">🎯 Proceso de Consultoría Guiado</h2>
-                <p className="text-blue-100 text-lg">
-                  Metodología estructurada en 4 pasos con IA integrada
-                </p>
-                <div className="mt-3 flex items-center space-x-6 text-sm text-blue-100">
-                  <span>📚 Base de Conocimiento</span>
-                  <span>📊 Análisis AS IS (6 ejes)</span>
-                  <span>💡 Recomendaciones TO BE</span>
-                  <span>📋 Fichas TO DO</span>
+              <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
+              <p className="text-gray-600">Flujo de Consultoría Guiado - 4 Pasos</p>
                 </div>
+            <div className="text-right">
+              <div className="text-sm text-gray-600 mb-1">Progreso General</div>
+              <div className="text-2xl font-bold text-blue-600">{getStepProgress().toFixed(0)}%</div>
               </div>
             </div>
-            <div className="flex flex-col space-y-3">
-              <Link 
-                href={`/projects/${projectId}/guided`}
-                className="bg-white text-blue-600 hover:bg-blue-50 px-8 py-4 rounded-lg font-bold text-lg text-center transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
+
+          {/* Progress Bar */}
+          <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
+            <div 
+              className="bg-blue-600 h-3 rounded-full transition-all duration-300"
+              style={{ width: `${getStepProgress()}%` }}
+            ></div>
+          </div>
+
+          {/* Steps Navigation */}
+          <div className="grid grid-cols-4 gap-4">
+            {[
+              { number: 1, title: 'Base de Conocimiento', completed: project.step_1_completed, current: currentStep === 1 },
+              { number: 2, title: 'AS IS', completed: project.step_2_completed, current: currentStep === 2 },
+              { number: 3, title: 'TO BE', completed: project.step_3_completed, current: currentStep === 3 },
+              { number: 4, title: 'TO DO', completed: project.step_4_completed, current: currentStep === 4 }
+            ].map((step) => (
+              <div 
+                key={step.number}
+                className={`p-3 rounded-lg border-2 text-center cursor-pointer transition-all ${
+                  step.current 
+                    ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                    : step.completed 
+                      ? 'border-green-500 bg-green-50 text-green-700' 
+                      : 'border-gray-300 bg-gray-50 text-gray-500'
+                }`}
+                onClick={() => setCurrentStep(step.number)}
               >
-                🚀 Iniciar Proceso
-              </Link>
-              <span className="text-blue-200 text-xs text-center font-medium">Método principal recomendado</span>
+                <div className="flex items-center justify-center mb-1">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
+                    step.completed ? 'bg-green-500 text-white' : 
+                    step.current ? 'bg-blue-500 text-white' : 'bg-gray-300 text-gray-600'
+                  }`}>
+                    {step.completed ? '✓' : step.number}
             </div>
           </div>
+                <div className="text-xs font-medium">{step.title}</div>
         </div>
-
-        {/* Project Header */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-8">
-          <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">{project.name}</h1>
-              {project.description && (
-                <p className="text-gray-600 mb-4">{project.description}</p>
-              )}
-              <div className="flex items-center space-x-4 text-sm text-gray-500">
-                <span>Estado: {project.status}</span>
-                <span>•</span>
-                <span>Creado: {new Date(project.created_at).toLocaleDateString()}</span>
+            ))}
               </div>
-            </div>
-            <div className="flex space-x-3">
-              <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm">
-                {areas.length} {areas.length === 1 ? 'área' : 'áreas'}
-              </span>
-              <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">
-                {knowledge.length} {knowledge.length === 1 ? 'conocimiento' : 'conocimientos'}
-              </span>
             </div>
           </div>
           
-          {/* Modo Legado */}
-          <div className="mt-6 pt-4 border-t border-gray-200">
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {/* PASO 1: BASE DE CONOCIMIENTO */}
+        {currentStep === 1 && (
+          <div className="bg-white rounded-lg shadow-lg">
+            <div className="border-b border-gray-200 p-6">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-lg font-medium text-gray-700 mb-1">Modo de Gestión Legado</h3>
-                <p className="text-gray-500 text-sm">
-                  Gestión manual de áreas y conocimiento. Se mantiene para compatibilidad con proyectos existentes.
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Paso 1: Base de Conocimiento
+                  </h2>
+                  <p className="text-gray-600 mt-2">
+                    Organiza el conocimiento por áreas y genera consolidaciones inteligentes con IA
                 </p>
               </div>
               <div className="text-right">
-                <div className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-xs font-medium mb-1">
-                  Modo Legado
+                  <div className="text-sm text-gray-600 mb-1">Completado</div>
+                  <div className="text-2xl font-bold text-green-600">{getStep1Completion().toFixed(0)}%</div>
                 </div>
-                <p className="text-xs text-gray-500">Para expertos</p>
               </div>
-            </div>
+              
+              {/* Step 1 Progress Bar */}
+              <div className="w-full bg-gray-200 rounded-full h-2 mt-4">
+                <div 
+                  className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${getStep1Completion()}%` }}
+                ></div>
           </div>
-        </div>
-
-        {/* Tabs */}
-        <div className="bg-white rounded-lg shadow-lg">
-          <div className="border-b border-gray-200">
-            <nav className="-mb-px flex">
-              <button
-                onClick={() => setActiveTab('areas')}
-                className={`py-4 px-6 border-b-2 font-medium text-sm ${
-                  activeTab === 'areas'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                Áreas Organizacionales ({areas.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('knowledge')}
-                className={`py-4 px-6 border-b-2 font-medium text-sm ${
-                  activeTab === 'knowledge'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                Conocimiento ({knowledge.length})
-              </button>
-            </nav>
           </div>
 
           <div className="p-6">
-            {/* Tab Content: Areas */}
-            {activeTab === 'areas' && (
-              <div>
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900">
-                    Gestión de Áreas Organizacionales
-                  </h3>
+              {/* Action Buttons */}
+              <div className="flex space-x-4 mb-6">
                   <button
                     onClick={() => {
                       setNewArea({ name: '', description: '', color: getNextAvailableColor() });
                       setShowCreateArea(true);
                     }}
-                    className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium"
                   >
                     + Crear Área
                   </button>
+                <button
+                  onClick={() => setShowAddKnowledge(true)}
+                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium"
+                >
+                  📝 Añadir Conocimiento
+                </button>
+                <button
+                  onClick={() => setShowUploadFile(true)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium"
+                >
+                  📄 Subir Archivo
+                </button>
+              </div>
+
+              {/* Drag & Drop Area */}
+              <div 
+                className={`border-2 border-dashed rounded-lg p-6 mb-6 transition-colors ${
+                  isDragOver 
+                    ? 'border-blue-500 bg-blue-50' 
+                    : 'border-gray-300 bg-gray-50 hover:border-blue-400 hover:bg-blue-50'
+                }`}
+                onDragOver={(e) => handleDragOver(e)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e)}
+              >
+                <div className="text-center">
+                  <div className="text-4xl mb-2">📎</div>
+                  <h4 className="text-lg font-medium text-gray-700 mb-2">
+                    Arrastra archivos aquí para añadir conocimiento
+                  </h4>
+                  <p className="text-gray-500 mb-4">
+                    Soporta archivos .txt y .docx. Después de subir los archivos podrás asignarlos a las áreas correspondientes.
+                  </p>
+                  <div className="flex justify-center">
+                    <label className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium cursor-pointer">
+                      O selecciona archivos
+                      <input
+                        type="file"
+                        multiple
+                        accept=".txt,.docx"
+                        onChange={async (e) => {
+                          if (e.target.files) {
+                            const files = Array.from(e.target.files).filter(file => 
+                              file.type === 'text/plain' || 
+                              file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                            );
+
+                            if (files.length === 0) {
+                              showNotification('Por favor, selecciona solo archivos .txt o .docx', 'error');
+                              return;
+                            }
+
+                            // Simular el mismo comportamiento que el drag & drop
+                            const fakeEvent = {
+                              preventDefault: () => {},
+                              dataTransfer: { files }
+                            } as any;
+                            
+                            await handleDrop(fakeEvent);
+
+                            // Limpiar el input
+                            e.target.value = '';
+                          }
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                {/* Upload Progress */}
+                {Object.keys(uploadingFiles).length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <h5 className="text-sm font-medium text-gray-700">Subiendo archivos:</h5>
+                    {Object.entries(uploadingFiles).map(([fileName, status]) => (
+                      <div key={fileName} className="flex items-center space-x-2 text-sm">
+                        <div className={`w-4 h-4 rounded-full ${
+                          status === 'uploading' ? 'bg-blue-500 animate-spin' :
+                          status === 'success' ? 'bg-green-500' :
+                          status === 'error' ? 'bg-red-500' : 'bg-gray-300'
+                        }`}>
+                          {status === 'success' && <span className="text-white text-xs">✓</span>}
+                          {status === 'error' && <span className="text-white text-xs">✗</span>}
+                        </div>
+                        <span className="text-gray-700">{fileName}</span>
+                        <span className={`capitalize ${
+                          status === 'success' ? 'text-green-600' :
+                          status === 'error' ? 'text-red-600' :
+                          status === 'uploading' ? 'text-blue-600' : 'text-gray-600'
+                        }`}>
+                          {status === 'uploading' ? 'Subiendo...' : 
+                           status === 'success' ? 'Completado' :
+                           status === 'error' ? 'Error' : 'Pendiente'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 </div>
 
                 {/* Areas Grid */}
@@ -893,244 +1271,619 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
                         setNewArea({ name: '', description: '', color: getNextAvailableColor() });
                         setShowCreateArea(true);
                       }}
-                      className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
                     >
                       Crear primera área
                     </button>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {areas.map((area) => {
                       const knowledgeCount = getKnowledgeCountByArea(area.id);
+                    const hasConsolidated = consolidatedKnowledge[area.id];
+                    const isConsolidating = consolidatingArea === area.id;
+                    
                       return (
-                        <div key={area.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                          <div className="flex items-center justify-between mb-3">
+                      <div 
+                        key={area.id} 
+                        className="border-2 border-gray-200 hover:border-gray-300 rounded-lg p-6 hover:shadow-md transition-all"
+                      >
+                        {/* Area Header */}
+                        <div className="flex items-center justify-between mb-4">
                             <div className="flex items-center">
                               <div 
                                 className="w-4 h-4 rounded-full mr-3"
                                 style={{ backgroundColor: area.color }}
                               ></div>
-                              <h4 className="font-medium text-gray-900">{area.name}</h4>
+                            <h4 className="font-semibold text-gray-900">{area.name}</h4>
                             </div>
                             <div className="flex items-center space-x-2">
-                              <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs font-medium">
-                                {knowledgeCount} {knowledgeCount === 1 ? 'fuente' : 'fuentes'}
-                              </span>
-                              {area.name !== 'Global' && (
                                 <button
-                                  onClick={() => handleDeleteArea(area.id)}
-                                  className="text-red-500 hover:text-red-700 text-sm"
+                              onClick={() => toggleAreaSources(area.id)}
+                              className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs font-medium hover:bg-blue-200 transition-colors cursor-pointer"
                                 >
-                                  ✕
+                              {knowledgeCount} {knowledgeCount === 1 ? 'fuente' : 'fuentes'}
+                              <span className="ml-1">{expandedAreaSources[area.id] ? '▼' : '▶'}</span>
                                 </button>
+                            {hasConsolidated && (
+                              <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">
+                                ✓ Consolidado
+                              </span>
                               )}
                             </div>
                           </div>
+
+                        {/* Area Description */}
                           {area.description && (
-                            <p className="text-gray-600 text-sm mb-3">{area.description}</p>
+                          <p className="text-gray-600 text-sm mb-4">{area.description}</p>
+                        )}
+
+                        {/* Sources List - Expandable */}
+                        {expandedAreaSources[area.id] && knowledgeCount > 0 && (
+                          <div className="mb-4 bg-gray-50 rounded-lg p-3">
+                            <h5 className="text-sm font-medium text-gray-700 mb-2">Fuentes de Conocimiento:</h5>
+                            <div className="space-y-2">
+                                                            {getKnowledgeByArea(area.id).map((knowledgeItem) => (
+                                <div key={knowledgeItem.id} className="flex items-center justify-between bg-white p-2 rounded border">
+                                  <div className="flex items-center space-x-2 flex-1 min-w-0">
+                                    <div className="text-sm flex-shrink-0">
+                                      {knowledgeItem.source_type === 'upload' ? '📄' : '📝'}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-medium text-gray-900 truncate">
+                                        {knowledgeItem.title}
+                                      </div>
+                                      <div className="text-xs text-gray-500 truncate">
+                                        {knowledgeItem.source_type === 'upload' ? 'Archivo' : 'Manual'} • {new Date(knowledgeItem.uploaded_at).toLocaleDateString()}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center space-x-1 flex-shrink-0 ml-2">
+                                    <button
+                                      onClick={() => handleViewKnowledge(knowledgeItem)}
+                                      className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50"
+                                      title="Ver contenido"
+                                    >
+                                      👁️
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteKnowledge(knowledgeItem)}
+                                      className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                                      title="Eliminar"
+                                    >
+                                      🗑️
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+
+
+                        {/* Area Actions */}
+                        <div className="space-y-2">
+                          <button
+                            onClick={() => handleConsolidateArea(area)}
+                            disabled={knowledgeCount === 0 || isConsolidating}
+                            className={`w-full py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                              knowledgeCount === 0 
+                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                : isConsolidating
+                                  ? 'bg-blue-100 text-blue-600 cursor-not-allowed'
+                                  : hasConsolidated
+                                    ? 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
+                                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                            }`}
+                          >
+                            {isConsolidating ? (
+                              <span className="flex items-center justify-center">
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
+                                Consolidando con IA...
+                              </span>
+                            ) : hasConsolidated ? (
+                              '🔄 Regenerar Consolidación'
+                            ) : (
+                              '🤖 Consolidar con IA'
+                            )}
+                          </button>
+
+                          {hasConsolidated && (
+                            <button
+                              onClick={() => handleViewConsolidated(area)}
+                              className="w-full py-2 px-4 rounded-lg text-sm font-medium bg-green-100 text-green-700 hover:bg-green-200"
+                            >
+                              👁️ Ver Conocimiento Consolidado
+                            </button>
                           )}
+                        </div>
+
+                        {/* Area Meta */}
+                        <div className="mt-4 pt-4 border-t border-gray-100">
                           <div className="text-xs text-gray-500">
-                            Creada: {new Date(area.created_at).toLocaleDateString()}
+                            Creada: {new Date(area.created_at).toLocaleDateString('es-ES')}
+                          </div>
+                          {hasConsolidated && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              Consolidado: {new Date(consolidatedKnowledge[area.id].updated_at).toLocaleDateString('es-ES')}
+                            </div>
+                          )}
                           </div>
                         </div>
                       );
                     })}
                   </div>
                 )}
+            </div>
               </div>
             )}
 
-            {/* Tab Content: Knowledge */}
-            {activeTab === 'knowledge' && (
+        {/* PASO 2: ANÁLISIS AS IS */}
+        {currentStep === 2 && (
+          <div className="bg-white rounded-lg shadow-lg">
+            <div className="border-b border-gray-200 p-6">
+              <div className="flex items-center justify-between">
               <div>
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900">
-                    Gestión de Conocimiento del Proyecto
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Paso 2: Análisis AS IS
+                  </h2>
+                  <p className="text-gray-600 mt-2">
+                    Análisis del estado actual de la organización según los 6 ejes de transformación digital
+                  </p>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-600 mb-1">Estado</div>
+                  <div className={`text-2xl font-bold ${analysisAsIs?.validated ? 'text-green-600' : 'text-yellow-600'}`}>
+                    {analysisAsIs?.validated ? 'Validado' : analysisAsIs ? 'Generado' : 'Pendiente'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {!analysisAsIs ? (
+                <div className="text-center py-12">
+                  <div className="text-gray-400 text-6xl mb-4">📊</div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">
+                    Análisis AS IS no generado
                   </h3>
-                  <div className="flex justify-between items-center">
+                  <p className="text-gray-500 mb-6">
+                    Genera un análisis completo del estado actual de la organización basado en el conocimiento consolidado.
+                  </p>
+                      <button
+                    onClick={handleGenerateAnalysis}
+                    disabled={generatingAnalysis}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {generatingAnalysis ? (
+                      <span className="flex items-center">
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                        Generando con IA...
+                      </span>
+                    ) : (
+                      '🤖 Generar Análisis AS IS'
+                    )}
+                      </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Analysis Header */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        analysisAsIs.validated 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-yellow-100 text-yellow-800'
+                      }`}>
+                        {analysisAsIs.validated ? '✓ Validado' : '⏳ Pendiente de Validación'}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        Versión {analysisAsIs.version} • {new Date(analysisAsIs.updated_at).toLocaleDateString('es-ES')}
+                      </div>
+                    </div>
                     <div className="flex space-x-3">
                       <button
-                        onClick={() => setShowAddKnowledge(true)}
-                        className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg font-medium"
+                        onClick={handleEditAnalysis}
+                        className="px-4 py-2 text-blue-600 border border-blue-300 rounded-lg hover:bg-blue-50"
                       >
-                        📝 Añadir Conocimiento
+                        ✏️ Editar
                       </button>
+                      {!analysisAsIs.validated && (
                       <button
-                        onClick={() => setShowUploadKnowledge(true)}
-                        className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium"
+                          onClick={handleValidateAnalysis}
+                          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
                       >
-                        📄 Subir Archivo
+                          ✅ Validar y Continuar
                       </button>
-                      <button
-                        onClick={() => setShowMultiUpload(true)}
-                        className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg font-medium"
-                      >
-                        📎 Subida Múltiple
-                      </button>
+                      )}
                     </div>
-                    {knowledge.length > 0 && (
-                      <button
-                        onClick={handleDeleteAllKnowledge}
-                        className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-medium"
-                      >
-                        🗑️ Eliminar Todo ({knowledge.length})
-                      </button>
+                  </div>
+
+                  {/* Analysis Sections */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {[
+                      { key: 'strategy_governance', title: '1. Estrategia y Gobierno', content: analysisAsIs.strategy_governance },
+                      { key: 'processes_operations', title: '2. Procesos y Operaciones', content: analysisAsIs.processes_operations },
+                      { key: 'technology_infrastructure', title: '3. Tecnología e Infraestructura', content: analysisAsIs.technology_infrastructure },
+                      { key: 'data_information', title: '4. Datos e Información', content: analysisAsIs.data_information },
+                      { key: 'people_culture', title: '5. Personas y Cultura', content: analysisAsIs.people_culture },
+                      { key: 'customer_experience', title: '6. Experiencia del Cliente', content: analysisAsIs.customer_experience }
+                    ].map((section) => (
+                      <div key={section.key} className="border border-gray-200 rounded-lg p-4">
+                        <h4 className="font-semibold text-gray-900 mb-3">{section.title}</h4>
+                        <div className="text-sm text-gray-700 max-h-48 overflow-y-auto">
+                          {section.content ? (
+                            <pre className="whitespace-pre-wrap font-sans">{section.content}</pre>
+                          ) : (
+                            <span className="text-gray-400 italic">Sin contenido</span>
                     )}
                   </div>
+                      </div>
+                    ))}
                 </div>
 
-                {/* Drag & Drop Area */}
-                <div 
-                  className={`border-2 border-dashed rounded-lg p-6 mb-6 transition-colors ${
-                    isDragOver 
-                      ? 'border-purple-500 bg-purple-50' 
-                      : 'border-gray-300 bg-gray-50 hover:border-purple-400 hover:bg-purple-50'
-                  }`}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                >
-                  <div className="text-center">
-                    <div className="text-4xl mb-2">📎</div>
-                    <h4 className="text-lg font-medium text-gray-700 mb-2">
-                      Arrastra múltiples archivos aquí
-                    </h4>
-                    <p className="text-gray-500 mb-4">
-                      Soporta archivos .txt, .docx y .pdf. Podrás asignar cada archivo a un área específica.
-                    </p>
-                    <div className="flex justify-center">
-                      <label className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg font-medium cursor-pointer">
-                        O selecciona archivos
-                        <input
-                          type="file"
-                          multiple
-                          accept=".txt,.docx,.pdf"
-                          onChange={handleFileInputChange}
-                          className="hidden"
-                        />
-                      </label>
+                  {/* Conclusions */}
+                  {analysisAsIs.conclusions && (
+                    <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                      <h4 className="font-semibold text-gray-900 mb-3">Conclusiones Generales</h4>
+                      <div className="text-sm text-gray-700">
+                        <pre className="whitespace-pre-wrap font-sans">{analysisAsIs.conclusions}</pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* PASO 3: RECOMENDACIONES TO BE */}
+        {currentStep === 3 && (
+          <div className="bg-white rounded-lg shadow-lg">
+            <div className="border-b border-gray-200 p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Paso 3: Recomendaciones TO BE
+                  </h2>
+                  <p className="text-gray-600 mt-2">
+                    Proyectos recomendados para la transformación digital de la organización
+                  </p>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-600 mb-1">Aprobadas</div>
+                  <div className="text-2xl font-bold text-green-600">
+                    {getAcceptedRecommendationsCount()}/{recommendations.length}
+                  </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Knowledge List */}
-                {knowledge.length === 0 ? (
+            <div className="p-6">
+              {recommendations.length === 0 ? (
                   <div className="text-center py-12">
-                    <div className="text-gray-400 text-6xl mb-4">🧠</div>
+                  <div className="text-gray-400 text-6xl mb-4">💡</div>
                     <h3 className="text-lg font-medium text-gray-900 mb-2">
-                      No hay conocimiento añadido
+                    Recomendaciones no generadas
                     </h3>
-                    <p className="text-gray-500 mb-4">
-                      Añade conocimiento subiendo archivos (.txt, .docx) o escribiendo notas manualmente.
+                  <p className="text-gray-500 mb-6">
+                    Genera recomendaciones de proyectos basadas en el análisis AS IS validado.
                     </p>
-                    <div className="flex justify-center space-x-3">
                       <button
-                        onClick={() => setShowAddKnowledge(true)}
-                        className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg"
-                      >
-                        📝 Añadir Conocimiento
+                    onClick={handleGenerateRecommendations}
+                    disabled={generatingRecommendations}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {generatingRecommendations ? (
+                      <span className="flex items-center">
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                        Generando con IA...
+                      </span>
+                    ) : (
+                      '🤖 Generar Recomendaciones'
+                    )}
                       </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex space-x-4">
                       <button
-                        onClick={() => setShowUploadKnowledge(true)}
-                        className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg"
+                        onClick={handleGenerateRecommendations}
+                        disabled={generatingRecommendations}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
                       >
-                        📄 Subir Archivo
+                        🔄 Regenerar Recomendaciones
                       </button>
                     </div>
+                    <div className="text-sm text-gray-600">
+                      {getAcceptedRecommendationsCount() > 0 && (
+                        <span className="text-green-600 font-medium">
+                          ✓ {getAcceptedRecommendationsCount()} recomendaciones aprobadas para el paso 4
+                        </span>
+                      )}
                   </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {knowledge.map((item) => (
-                      <div key={item.id} className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-lg transition-all duration-200 hover:border-gray-300">
-                        {/* Header de la tarjeta */}
-                        <div className="flex items-start justify-between mb-4">
-                          <div className="flex items-center">
-                            <div className="text-2xl mr-3">
-                              {item.source_type === 'upload' ? '📄' : '📝'}
                             </div>
+
+                  {/* Categories Filter */}
+                  <div className="flex flex-wrap gap-3">
+                    {['technological', 'training', 'cultural', 'methodological'].map((category) => {
+                      const count = recommendations.filter(rec => rec.category === category).length;
+                      const categoryNames = {
+                        technological: 'Tecnológicos',
+                        training: 'Formativos',
+                        cultural: 'Culturales',
+                        methodological: 'Metodológicos'
+                      };
+                      
+                      return (
+                        <div key={category} className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm">
+                          {categoryNames[category as keyof typeof categoryNames]}: {count}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Recommendations Grid */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {recommendations.map((recommendation) => (
+                      <div key={recommendation.id} className="border border-gray-200 rounded-lg p-6">
+                        {/* Recommendation Header */}
+                        <div className="flex items-start justify-between mb-4">
                             <div className="flex-1">
-                              <h4 className="font-semibold text-gray-900 text-sm leading-tight mb-1">
-                                {item.title}
-                              </h4>
-                              <div className="text-xs text-gray-500">
-                                {item.source_type === 'upload' ? 'Archivo' : 'Manual'} • {new Date(item.uploaded_at).toLocaleDateString()}
+                            <h4 className="font-semibold text-gray-900 mb-2">{recommendation.title}</h4>
+                            <div className="flex items-center space-x-2 mb-2">
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                recommendation.category === 'technological' ? 'bg-blue-100 text-blue-800' :
+                                recommendation.category === 'training' ? 'bg-green-100 text-green-800' :
+                                recommendation.category === 'cultural' ? 'bg-purple-100 text-purple-800' :
+                                'bg-orange-100 text-orange-800'
+                              }`}>
+                                {recommendation.category === 'technological' ? 'Tecnológico' :
+                                 recommendation.category === 'training' ? 'Formativo' :
+                                 recommendation.category === 'cultural' ? 'Cultural' : 'Metodológico'}
+                              </span>
+                              <span className="bg-gray-100 text-gray-800 px-2 py-1 rounded-full text-xs font-medium">
+                                Prioridad: {recommendation.priority}/10
+                              </span>
                               </div>
                             </div>
                           </div>
+
+                        {/* Description */}
+                        <p className="text-sm text-gray-700 mb-4 line-clamp-3">
+                          {recommendation.description}
+                        </p>
+
+                        {/* Status and Actions */}
+                        <div className="flex items-center justify-between">
+                          <div className={`px-3 py-1 rounded-full text-sm font-medium ${
+                            recommendation.status === 'accepted' ? 'bg-green-100 text-green-800' :
+                            recommendation.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                            recommendation.status === 'modified' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {recommendation.status === 'accepted' ? '✓ Aprobada' :
+                             recommendation.status === 'rejected' ? '✗ Rechazada' :
+                             recommendation.status === 'modified' ? '📝 Modificada' : '⏳ Propuesta'}
                         </div>
 
-                        {/* Áreas asignadas */}
-                        <div className="mb-3">
-                          {(item.knowledge_areas || []).length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
-                              {(item.knowledge_areas || []).map((ka: any) => (
-                                <span
-                                  key={ka.area_id}
-                                  className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium text-white"
-                                  style={{ backgroundColor: ka.areas?.color || '#6B7280' }}
-                                >
-                                  {ka.areas?.name || 'Área sin nombre'}
-                                </span>
+                          <div className="flex space-x-2">
+                            {recommendation.status !== 'accepted' && (
+                              <button
+                                onClick={() => handleUpdateRecommendationStatus(recommendation.id, 'accepted')}
+                                className="text-green-600 hover:text-green-800 text-sm font-medium"
+                              >
+                                ✓ Aprobar
+                              </button>
+                            )}
+                            {recommendation.status !== 'rejected' && (
+                              <button
+                                onClick={() => handleUpdateRecommendationStatus(recommendation.id, 'rejected')}
+                                className="text-red-600 hover:text-red-800 text-sm font-medium"
+                              >
+                                ✗ Rechazar
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setSelectedRecommendation(recommendation);
+                                setShowRecommendationModal(true);
+                              }}
+                              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                            >
+                              👁️ Ver
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                               ))}
                             </div>
-                          ) : (
-                            <span className="text-gray-400 text-xs italic">Sin áreas asignadas</span>
-                          )}
+
+                  {/* Continue to Step 4 */}
+                  {getAcceptedRecommendationsCount() > 0 && (
+                    <div className="text-center pt-6 border-t border-gray-200">
+                      <button
+                        onClick={() => advanceStep(3)}
+                        className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium"
+                      >
+                        ➡️ Continuar al Paso 4 con {getAcceptedRecommendationsCount()} proyectos aprobados
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* PASO 4: FICHAS DE PROYECTO TO DO */}
+        {currentStep === 4 && (
+          <div className="bg-white rounded-lg shadow-lg">
+            <div className="border-b border-gray-200 p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Paso 4: Fichas de Proyecto TO DO
+                  </h2>
+                  <p className="text-gray-600 mt-2">
+                    Documentación detallada de los proyectos aprobados para su implementación
+                  </p>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-600 mb-1">Fichas Generadas</div>
+                  <div className="text-2xl font-bold text-blue-600">
+                    {projectSheets.length}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {projectSheets.length === 0 ? (
+                <div className="text-center py-12">
+                  <div className="text-gray-400 text-6xl mb-4">📋</div>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">
+                    Fichas de proyecto no generadas
+                  </h3>
+                  <p className="text-gray-500 mb-6">
+                    Genera fichas detalladas para todos los proyectos aprobados en el paso anterior.
+                  </p>
+                  <button
+                    onClick={handleGenerateProjectSheets}
+                    disabled={generatingSheets}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {generatingSheets ? (
+                      <span className="flex items-center">
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                        Generando fichas...
+                      </span>
+                    ) : (
+                      '🤖 Generar Fichas de Proyecto'
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-between">
+                    <button
+                      onClick={handleGenerateProjectSheets}
+                      disabled={generatingSheets}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
+                    >
+                      🔄 Regenerar Fichas
+                    </button>
+                    <div className="text-sm text-gray-600">
+                      {projectSheets.filter(sheet => sheet.validated).length} de {projectSheets.length} fichas validadas
+                    </div>
                         </div>
 
-                        {/* Preview del contenido */}
-                        <div className="bg-gray-50 rounded-lg p-3 mb-4">
-                          <div className="text-sm text-gray-600 line-clamp-3">
-                            {item.content.substring(0, 150)}
-                            {item.content.length > 150 && '...'}
+                  {/* Project Sheets Grid */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {projectSheets.map((sheet) => (
+                      <div key={sheet.id} className="border border-gray-200 rounded-lg p-6">
+                        {/* Sheet Header */}
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-gray-900 mb-2">{sheet.title}</h4>
+                            {sheet.project_recommendations && (
+                              <div className="flex items-center space-x-2 mb-2">
+                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                  sheet.project_recommendations.category === 'technological' ? 'bg-blue-100 text-blue-800' :
+                                  sheet.project_recommendations.category === 'training' ? 'bg-green-100 text-green-800' :
+                                  sheet.project_recommendations.category === 'cultural' ? 'bg-purple-100 text-purple-800' :
+                                  'bg-orange-100 text-orange-800'
+                                }`}>
+                                  {sheet.project_recommendations.category === 'technological' ? 'Tecnológico' :
+                                   sheet.project_recommendations.category === 'training' ? 'Formativo' :
+                                   sheet.project_recommendations.category === 'cultural' ? 'Cultural' : 'Metodológico'}
+                                </span>
+                                <span className="bg-gray-100 text-gray-800 px-2 py-1 rounded-full text-xs font-medium">
+                                  Prioridad: {sheet.project_recommendations.priority}/10
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                          <div className={`px-3 py-1 rounded-full text-sm font-medium ${
+                            sheet.validated ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {sheet.validated ? '✓ Validada' : '⏳ Pendiente'}
                           </div>
                         </div>
 
-                        {/* Información adicional */}
-                        <div className="mb-4">
-                          {item.file_name && (
-                            <div className="text-xs text-gray-500 mb-1">
-                              📎 {item.file_name}
-                              {item.file_size && ` (${(item.file_size / 1024 / 1024).toFixed(2)} MB)`}
+                        {/* Sheet Summary */}
+                        <div className="space-y-3 text-sm">
+                          {sheet.estimated_investment && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Inversión estimada:</span>
+                              <span className="font-medium">€{sheet.estimated_investment.toLocaleString()}</span>
                             </div>
                           )}
-                          {item.notes && (
-                            <div className="bg-yellow-50 border border-yellow-200 rounded-md p-2 mt-2">
-                              <div className="text-xs text-yellow-800 font-medium mb-1">Notas:</div>
-                              <div className="text-xs text-yellow-700 line-clamp-2">{item.notes}</div>
+                          {sheet.estimated_duration && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Duración estimada:</span>
+                              <span className="font-medium">{Math.round(sheet.estimated_duration / 30)} meses</span>
                             </div>
                           )}
+                          <div className="text-gray-700">
+                            <p className="line-clamp-3">{sheet.description}</p>
+                          </div>
                         </div>
 
-                        {/* Botones de acción */}
-                        <div className="flex justify-between pt-3 border-t border-gray-100">
+                        {/* Actions */}
+                        <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
                           <button 
-                            onClick={() => handleAssignAreas(item)}
-                            className="text-blue-500 hover:text-blue-700 text-xs font-medium hover:bg-blue-50 px-2 py-1 rounded transition-colors"
+                            onClick={() => {
+                              setSelectedSheet(sheet);
+                              setShowSheetModal(true);
+                            }}
+                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                           >
-                            Asignar Áreas
+                            👁️ Ver Completa
                           </button>
+                          {!sheet.validated && (
                           <button 
-                            onClick={() => handleViewContent(item)}
-                            className="text-green-500 hover:text-green-700 text-xs font-medium hover:bg-green-50 px-2 py-1 rounded transition-colors"
+                              onClick={() => handleValidateSheet(sheet.id)}
+                              className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm font-medium"
                           >
-                            Ver Contenido
+                              ✓ Validar
                           </button>
-                          <button 
-                            onClick={() => handleDeleteKnowledge(item)}
-                            className="text-red-500 hover:text-red-700 text-xs font-medium hover:bg-red-50 px-2 py-1 rounded transition-colors"
-                          >
-                            Eliminar
-                          </button>
+                          )}
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Complete Project */}
+                  {projectSheets.length > 0 && projectSheets.every(sheet => sheet.validated) && (
+                    <div className="text-center pt-6 border-t border-gray-200">
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-6">
+                        <div className="text-green-600 text-6xl mb-4">🎉</div>
+                        <h3 className="text-xl font-bold text-green-800 mb-2">
+                          ¡Felicitaciones! Flujo de Consultoría Completado
+                        </h3>
+                        <p className="text-green-700 mb-4">
+                          Has completado exitosamente los 4 pasos del proceso de consultoría guiado.
+                          Todas las fichas de proyecto están validadas y listas para implementación.
+                        </p>
+                          <button 
+                          onClick={() => advanceStep(4)}
+                          className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium"
+                          >
+                          ✅ Marcar Proyecto como Completado
+                          </button>
+                        </div>
                   </div>
                 )}
               </div>
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* Modal: Create Area */}
@@ -1202,7 +1955,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {/* Modal: Add Manual Knowledge */}
+      {/* Modal: Add Knowledge */}
       {showAddKnowledge && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -1295,33 +2048,665 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {/* Modal: Upload Knowledge */}
-      {showUploadKnowledge && (
+      {/* Modal: View Consolidated Knowledge */}
+      {showViewConsolidated && selectedAreaForConsolidated && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Conocimiento Consolidado: {selectedAreaForConsolidated.name}
+            </h3>
+            
+            {consolidatedKnowledge[selectedAreaForConsolidated.id] && (
+              <div>
+                <div className="mb-4 text-sm text-gray-600 bg-gray-50 p-3 rounded">
+                  <p><strong>Generado por IA:</strong> {consolidatedKnowledge[selectedAreaForConsolidated.id].ai_generated ? 'Sí' : 'No'}</p>
+                  <p><strong>Fuentes originales:</strong> {consolidatedKnowledge[selectedAreaForConsolidated.id].original_sources_count}</p>
+                  <p><strong>Última actualización:</strong> {new Date(consolidatedKnowledge[selectedAreaForConsolidated.id].updated_at).toLocaleString()}</p>
+                  <p><strong>Validado:</strong> {consolidatedKnowledge[selectedAreaForConsolidated.id].validated ? 'Sí' : 'No'}</p>
+              </div>
+
+                <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 max-h-96 overflow-y-auto">
+                  <pre className="whitespace-pre-wrap text-sm text-gray-800 font-mono">
+                    {consolidatedKnowledge[selectedAreaForConsolidated.id].content}
+                  </pre>
+                  </div>
+              </div>
+            )}
+
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowViewConsolidated(false);
+                  setSelectedAreaForConsolidated(null);
+                }}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+              {consolidatedKnowledge[selectedAreaForConsolidated.id] && (
+              <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(consolidatedKnowledge[selectedAreaForConsolidated.id].content);
+                    showNotification('Contenido copiado al portapapeles', 'success');
+                  }}
+                  className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600"
+                >
+                  Copiar Texto
+              </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit Analysis AS IS */}
+      {showAnalysisModal && analysisAsIs && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-6xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              ✏️ Editar Análisis AS IS
+            </h3>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {[
+                { key: 'strategy_governance', title: '1. Estrategia y Gobierno' },
+                { key: 'processes_operations', title: '2. Procesos y Operaciones' },
+                { key: 'technology_infrastructure', title: '3. Tecnología e Infraestructura' },
+                { key: 'data_information', title: '4. Datos e Información' },
+                { key: 'people_culture', title: '5. Personas y Cultura' },
+                { key: 'customer_experience', title: '6. Experiencia del Cliente' }
+              ].map((section) => (
+                <div key={section.key} className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-700">
+                    {section.title}
+                      </label>
+                  <textarea
+                    value={String(analysisEditData[section.key as keyof AnalysisAsIs] || '')}
+                    onChange={(e) => setAnalysisEditData(prev => ({
+                      ...prev,
+                      [section.key]: e.target.value
+                    }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                    rows={6}
+                    placeholder={`Análisis de ${section.title.toLowerCase()}...`}
+                  />
+                    </div>
+              ))}
+            </div>
+
+            {/* Conclusions */}
+            <div className="mt-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Conclusiones Generales
+              </label>
+              <textarea
+                value={analysisEditData.conclusions || ''}
+                onChange={(e) => setAnalysisEditData(prev => ({
+                  ...prev,
+                  conclusions: e.target.value
+                }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                rows={4}
+                placeholder="Conclusiones generales del análisis..."
+              />
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowAnalysisModal(false);
+                  setAnalysisEditData({});
+                }}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveAnalysis}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                💾 Guardar Cambios
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: View Recommendation Details */}
+      {showRecommendationModal && selectedRecommendation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              💡 Detalle de Recomendación
+            </h3>
+            
+            <div className="space-y-6">
+              {/* Header */}
+              <div>
+                <h4 className="text-xl font-bold text-gray-900 mb-2">
+                  {selectedRecommendation.title}
+                </h4>
+                <div className="flex items-center space-x-3">
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    selectedRecommendation.category === 'technological' ? 'bg-blue-100 text-blue-800' :
+                    selectedRecommendation.category === 'training' ? 'bg-green-100 text-green-800' :
+                    selectedRecommendation.category === 'cultural' ? 'bg-purple-100 text-purple-800' :
+                    'bg-orange-100 text-orange-800'
+                  }`}>
+                    {selectedRecommendation.category === 'technological' ? 'Tecnológico' :
+                     selectedRecommendation.category === 'training' ? 'Formativo' :
+                     selectedRecommendation.category === 'cultural' ? 'Cultural' : 'Metodológico'}
+                  </span>
+                  <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-sm font-medium">
+                    Prioridad: {selectedRecommendation.priority}/10
+                  </span>
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    selectedRecommendation.status === 'accepted' ? 'bg-green-100 text-green-800' :
+                    selectedRecommendation.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                    selectedRecommendation.status === 'modified' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-gray-100 text-gray-800'
+                  }`}>
+                    {selectedRecommendation.status === 'accepted' ? '✓ Aprobada' :
+                     selectedRecommendation.status === 'rejected' ? '✗ Rechazada' :
+                     selectedRecommendation.status === 'modified' ? '📝 Modificada' : '⏳ Propuesta'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <h5 className="font-semibold text-gray-900 mb-2">Descripción</h5>
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                    {selectedRecommendation.description}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Justification */}
+              <div>
+                <h5 className="font-semibold text-gray-900 mb-2">Justificación</h5>
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                    {selectedRecommendation.justification}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Metadata */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="font-medium text-gray-700">Generado por IA:</span>
+                    <span className="ml-2 text-gray-600">
+                      {selectedRecommendation.ai_generated ? 'Sí' : 'No'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-700">Validado:</span>
+                    <span className="ml-2 text-gray-600">
+                      {selectedRecommendation.validated ? 'Sí' : 'No'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-700">Creado:</span>
+                    <span className="ml-2 text-gray-600">
+                      {new Date(selectedRecommendation.created_at).toLocaleDateString('es-ES')}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-700">Actualizado:</span>
+                    <span className="ml-2 text-gray-600">
+                      {new Date(selectedRecommendation.updated_at).toLocaleDateString('es-ES')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center space-x-3">
+                {selectedRecommendation.status !== 'accepted' && (
+                  <button
+                    onClick={() => {
+                      handleUpdateRecommendationStatus(selectedRecommendation.id, 'accepted');
+                      setShowRecommendationModal(false);
+                    }}
+                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium"
+                  >
+                    ✓ Aprobar
+                  </button>
+                )}
+                {selectedRecommendation.status !== 'rejected' && (
+                  <button
+                    onClick={() => {
+                      handleUpdateRecommendationStatus(selectedRecommendation.id, 'rejected');
+                      setShowRecommendationModal(false);
+                    }}
+                    className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium"
+                  >
+                    ✗ Rechazar
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowRecommendationModal(false);
+                  setSelectedRecommendation(null);
+                }}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+              </div>
+            )}
+            
+      {/* Modal: View Project Sheet Details */}
+      {showSheetModal && selectedSheet && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-6xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              📋 Ficha de Proyecto Completa
+            </h3>
+            
+            <div className="space-y-6">
+              {/* Header */}
+              <div>
+                <h4 className="text-2xl font-bold text-gray-900 mb-2">
+                  {selectedSheet.title}
+                </h4>
+                <div className="flex items-center space-x-3">
+                  {selectedSheet.project_recommendations && (
+                    <>
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        selectedSheet.project_recommendations.category === 'technological' ? 'bg-blue-100 text-blue-800' :
+                        selectedSheet.project_recommendations.category === 'training' ? 'bg-green-100 text-green-800' :
+                        selectedSheet.project_recommendations.category === 'cultural' ? 'bg-purple-100 text-purple-800' :
+                        'bg-orange-100 text-orange-800'
+                      }`}>
+                        {selectedSheet.project_recommendations.category === 'technological' ? 'Tecnológico' :
+                         selectedSheet.project_recommendations.category === 'training' ? 'Formativo' :
+                         selectedSheet.project_recommendations.category === 'cultural' ? 'Cultural' : 'Metodológico'}
+                      </span>
+                      <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-sm font-medium">
+                        Prioridad: {selectedSheet.project_recommendations.priority}/10
+                      </span>
+                    </>
+                  )}
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    selectedSheet.validated ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                  }`}>
+                    {selectedSheet.validated ? '✓ Validada' : '⏳ Pendiente'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Investment and Duration Summary */}
+              <div className="grid grid-cols-2 gap-6 bg-gray-50 p-4 rounded-lg">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-blue-600">
+                    €{selectedSheet.estimated_investment ? selectedSheet.estimated_investment.toLocaleString() : 'N/A'}
+                  </div>
+                  <div className="text-sm text-gray-600">Inversión Estimada</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-green-600">
+                    {selectedSheet.estimated_duration ? Math.round(selectedSheet.estimated_duration / 30) : 'N/A'} meses
+                  </div>
+                  <div className="text-sm text-gray-600">Duración Estimada</div>
+                </div>
+              </div>
+
+              {/* Sections */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <div>
+                    <h5 className="font-semibold text-gray-900 mb-2">📝 Descripción</h5>
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                        {selectedSheet.description}
+              </pre>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h5 className="font-semibold text-gray-900 mb-2">🎯 Objetivos Estratégicos</h5>
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                        {selectedSheet.strategic_objectives}
+                      </pre>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h5 className="font-semibold text-gray-900 mb-2">💰 Beneficios Esperados</h5>
+                    <div className="bg-green-50 p-4 rounded-lg">
+                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                        {selectedSheet.expected_benefits}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <h5 className="font-semibold text-gray-900 mb-2">👥 Recursos Humanos</h5>
+                    <div className="bg-purple-50 p-4 rounded-lg">
+                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                        {selectedSheet.human_resources}
+                      </pre>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h5 className="font-semibold text-gray-900 mb-2">💻 Recursos Tecnológicos</h5>
+                    <div className="bg-orange-50 p-4 rounded-lg">
+                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                        {selectedSheet.technological_resources}
+                      </pre>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h5 className="font-semibold text-gray-900 mb-2">🏢 Áreas Involucradas</h5>
+                    <div className="bg-yellow-50 p-4 rounded-lg">
+                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
+                        {selectedSheet.involved_areas}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Metadata */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="font-medium text-gray-700">Creado:</span>
+                    <span className="ml-2 text-gray-600">
+                      {new Date(selectedSheet.created_at).toLocaleDateString('es-ES')}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-700">Actualizado:</span>
+                    <span className="ml-2 text-gray-600">  
+                      {new Date(selectedSheet.updated_at).toLocaleDateString('es-ES')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Validation Action */}
+              {!selectedSheet.validated && (
+                <div className="text-center p-4 bg-yellow-50 rounded-lg">
+                  <button
+                    onClick={() => {
+                      handleValidateSheet(selectedSheet.id);
+                      setShowSheetModal(false);
+                    }}
+                    className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium"
+                  >
+                    ✅ Validar Ficha de Proyecto
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowSheetModal(false);
+                  setSelectedSheet(null);
+                }}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+              <button
+                onClick={() => {
+                  // Create download content
+                  const content = `
+FICHA DE PROYECTO: ${selectedSheet.title}
+================================================
+
+DESCRIPCIÓN:
+${selectedSheet.description}
+
+OBJETIVOS ESTRATÉGICOS:
+${selectedSheet.strategic_objectives}
+
+BENEFICIOS ESPERADOS:
+${selectedSheet.expected_benefits}
+
+RECURSOS HUMANOS:
+${selectedSheet.human_resources}
+
+RECURSOS TECNOLÓGICOS:
+${selectedSheet.technological_resources}
+
+ÁREAS INVOLUCRADAS:
+${selectedSheet.involved_areas}
+
+INVERSIÓN ESTIMADA: €${selectedSheet.estimated_investment?.toLocaleString() || 'N/A'}
+DURACIÓN ESTIMADA: ${selectedSheet.estimated_duration ? Math.round(selectedSheet.estimated_duration / 30) : 'N/A'} meses
+
+Generado el: ${new Date().toLocaleDateString('es-ES')}
+                  `.trim();
+                  
+                  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `Ficha_Proyecto_${selectedSheet.title.replace(/\s+/g, '_')}.txt`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                  
+                  showNotification('Ficha descargada correctamente', 'success');
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              >
+                📥 Descargar Ficha
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Create Area */}
+      {showCreateArea && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">📄 Subir Archivo de Conocimiento</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Crear Nueva Área</h3>
             
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Título (opcional)
+                  Nombre del Área
                 </label>
-                <input
+                  <input
                   type="text"
-                  value={uploadTitle}
-                  onChange={(e) => setUploadTitle(e.target.value)}
+                  value={newArea.name}
+                  onChange={(e) => setNewArea(prev => ({ ...prev, name: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-                  placeholder="Si está vacío, se usará el nombre del archivo"
+                  placeholder="ej. Recursos Humanos, IT, Ventas..."
+                  autoFocus
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Archivo (.txt, .docx, .pdf)
+                  Descripción (opcional)
+                </label>
+                <textarea
+                  value={newArea.description}
+                  onChange={(e) => setNewArea(prev => ({ ...prev, description: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  rows={3}
+                  placeholder="Describe el propósito de esta área..."
+                />
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="flex items-center space-x-2">
+                  <div 
+                    className="w-6 h-6 rounded-full border-2 border-white shadow-sm"
+                    style={{ backgroundColor: newArea.color }}
+                  ></div>
+                  <span className="text-sm text-gray-600">
+                    Se asignará automáticamente el color {newArea.color}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowCreateArea(false);
+                  setNewArea({ name: '', description: '', color: getNextAvailableColor() });
+                }}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateArea}
+                disabled={!newArea.name.trim() || isCreating}
+                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
+              >
+                {isCreating ? 'Creando...' : 'Crear Área'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Add Manual Knowledge */}
+      {showAddKnowledge && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">📝 Añadir Conocimiento Manual</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Título *
+                </label>
+                <input
+                  type="text"
+                  value={manualTitle}
+                  onChange={(e) => setManualTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                  placeholder="ej. Notas de la reunión con IT, Análisis de procesos..."
+                />
+                </div>
+                
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Contenido *
+                </label>
+                <textarea
+                  value={manualContent}
+                  onChange={(e) => setManualContent(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                  rows={10}
+                  placeholder="Escribe aquí el conocimiento que quieres añadir al proyecto..."
+                />
+                <div className="text-xs text-gray-500 mt-1">
+                  {manualContent.length} caracteres
+                </div>
+              </div>
+
+                              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Notas adicionales (opcional)
+                </label>
+                <textarea
+                  value={manualNotes}
+                  onChange={(e) => setManualNotes(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                  rows={3}
+                  placeholder="Contexto, fuente, observaciones..."
+                />
+                                </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Asignar a área (opcional)
+                </label>
+                <select
+                  value={selectedAreaId}
+                  onChange={(e) => setSelectedAreaId(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                >
+                  <option value="">Sin asignar</option>
+                  {areas.map((area) => (
+                    <option key={area.id} value={area.id}>
+                      {area.name}
+                    </option>
+                  ))}
+                </select>
+                                </div>
+                              </div>
+
+            <div className="flex justify-end space-x-3 mt-6">
+                                <button
+                onClick={() => {
+                  setShowAddKnowledge(false);
+                  setManualTitle('');
+                  setManualContent('');
+                  setManualNotes('');
+                  setSelectedAreaId('');
+                }}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cancelar
+                                </button>
+              <button
+                onClick={handleAddManualKnowledge}
+                disabled={!manualTitle.trim() || !manualContent.trim() || isAdding}
+                className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50"
+              >
+                {isAdding ? 'Añadiendo...' : 'Añadir Conocimiento'}
+              </button>
+                            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Upload File */}
+      {showUploadFile && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">📄 Subir Archivo de Conocimiento</h3>
+            
+            <div className="space-y-4">
+                                <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Título (opcional)
+                                  </label>
+                                                                     <input
+                                     type="text"
+                  value={uploadTitle}
+                  onChange={(e) => setUploadTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  placeholder="Si está vacío, se usará el nombre del archivo"
+                                   />
+                                </div>
+
+                                <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Archivo (.txt, .docx)
                 </label>
                 <input
                   type="file"
-                  accept=".txt,.docx,.pdf"
+                  accept=".txt,.docx"
                   onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -1331,14 +2716,33 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
                   </div>
                 )}
               </div>
-            </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Asignar a área (opcional)
+                                  </label>
+                                                                     <select
+                  value={selectedAreaId}
+                  onChange={(e) => setSelectedAreaId(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                                   >
+                                    <option value="">Sin asignar</option>
+                                    {areas.map((area) => (
+                                      <option key={area.id} value={area.id}>
+                                        {area.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
 
             <div className="flex justify-end space-x-3 mt-6">
               <button
                 onClick={() => {
-                  setShowUploadKnowledge(false);
+                  setShowUploadFile(false);
                   setSelectedFile(null);
                   setUploadTitle('');
+                  setSelectedAreaId('');
                 }}
                 className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
               >
@@ -1353,79 +2757,126 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               </button>
             </div>
           </div>
-        </div>
-      )}
+                              </div>
+                            )}
 
-      {/* Modal: Assign Areas */}
-      {showAssignAreas && selectedKnowledge && (
+      {/* Modal: Assign Areas to Knowledge */}
+      {showAssignAreasModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md max-h-[80vh] overflow-y-auto">
+          <div className="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[80vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Asignar Áreas a: {selectedKnowledge.title}
+              📂 Asignar Conocimiento a Áreas
             </h3>
             
-            <div className="space-y-3">
-              {areas.length === 0 ? (
-                <p className="text-gray-500 text-center py-4">
-                  No hay áreas creadas. Crea áreas primero para poder asignarlas.
-                </p>
-              ) : (
-                areas.map((area) => {
-                  const isAssigned = selectedAreas.includes(area.id);
-                  return (
-                    <div key={area.id} className="flex items-center space-x-3">
-                      <input
-                        type="checkbox"
-                        id={`area-${area.id}`}
-                        checked={isAssigned}
-                        onChange={() => toggleAreaSelection(area.id)}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <label 
-                        htmlFor={`area-${area.id}`}
-                        className="flex items-center space-x-2 cursor-pointer flex-1"
-                      >
-                        <div 
-                          className="w-4 h-4 rounded-full"
-                          style={{ backgroundColor: area.color }}
-                        ></div>
-                        <span className="text-gray-900">{area.name}</span>
-                      </label>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+            <p className="text-gray-600 mb-6">
+              Selecciona el área correspondiente para cada archivo subido. Puedes dejar archivos sin asignar si lo prefieres.
+            </p>
 
-            <div className="flex justify-end space-x-3 mt-6">
-              <button
-                onClick={() => {
-                  setShowAssignAreas(false);
-                  setSelectedKnowledge(null);
-                  setSelectedAreas([]);
-                }}
-                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSaveAreaAssignments}
-                disabled={isAssigning}
-                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
-              >
-                {isAssigning ? 'Guardando...' : 'Guardar Asignaciones'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            <div className="space-y-4 mb-6">
+              {pendingKnowledgeAssignments.map((knowledge) => (
+                <div key={knowledge.id} className="border border-gray-200 rounded-lg p-4">
+                  <div className="flex items-start space-x-4">
+                    <div className="text-2xl">📄</div>
+                    <div className="flex-1">
+                      <h4 className="font-medium text-gray-900 mb-1">
+                        {knowledge.title}
+                      </h4>
+                                             <div className="text-sm text-gray-500 mb-3">
+                         {knowledge.file_name && (
+                           <span>Archivo: {knowledge.file_name}</span>
+                         )}
+                         {knowledge.file_size && (
+                           <span className="ml-3">
+                             Tamaño: {(knowledge.file_size / 1024 / 1024).toFixed(2)} MB
+                           </span>
+                         )}
+                         <span className="ml-3">
+                           Caracteres: {knowledge.content ? knowledge.content.length.toLocaleString() : 'No disponible'}
+                         </span>
+                       </div>
+                      
+                      <div className="flex items-center space-x-2">
+                        <label className="text-sm font-medium text-gray-700">
+                          Asignar a área:
+                        </label>
+                        <select
+                          value={knowledgeAreaAssignments[knowledge.id] || ''}
+                          onChange={(e) => handleAssignmentChange(knowledge.id, e.target.value)}
+                          className="flex-1 px-3 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                        >
+                          <option value="">Sin asignar</option>
+                          {areas.map((area) => (
+                            <option key={area.id} value={area.id}>
+                              {area.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      {knowledgeAreaAssignments[knowledge.id] && (
+                        <div className="mt-2">
+                          {(() => {
+                            const selectedArea = areas.find(a => a.id === knowledgeAreaAssignments[knowledge.id]);
+                            return selectedArea ? (
+                              <span
+                                className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium text-white"
+                                style={{ backgroundColor: selectedArea.color }}
+                              >
+                                ✓ {selectedArea.name}
+                              </span>
+                            ) : null;
+                          })()}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+              ))}
+                </div>
 
-      {/* Modal: View Content */}
-      {showViewContent && selectedKnowledge && (
+            {areas.length === 0 && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+                <div className="flex items-center">
+                  <div className="text-yellow-400 text-xl mr-3">⚠️</div>
+                  <div>
+                    <h4 className="text-yellow-800 font-medium">No hay áreas creadas</h4>
+                    <p className="text-yellow-700 text-sm mt-1">
+                      Los archivos se subirán sin asignar a ningún área. Puedes crear áreas y asignarlos después.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+                <div className="flex justify-between items-center mt-6">
+              <div className="text-sm text-gray-500">
+                {Object.values(knowledgeAreaAssignments).filter(areaId => areaId).length} de {pendingKnowledgeAssignments.length} archivos asignados
+                  </div>
+                  <div className="flex space-x-3">
+                    <button
+                  onClick={handleSkipAssignments}
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Omitir Asignación
+                    </button>
+                    <button
+                  onClick={handleConfirmAssignments}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600"
+                    >
+                  Confirmar Asignaciones
+                    </button>
+              </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+      {/* Modal: View Knowledge Content */}
+      {showViewKnowledge && selectedKnowledge && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Contenido: {selectedKnowledge.title}
+              👁️ Contenido: {selectedKnowledge.title}
             </h3>
             
             <div className="mb-4 text-sm text-gray-600">
@@ -1438,6 +2889,22 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               )}
               <p><strong>Añadido:</strong> {new Date(selectedKnowledge.uploaded_at).toLocaleString()}</p>
               <p><strong>Caracteres:</strong> {selectedKnowledge.content.length}</p>
+              {selectedKnowledge.knowledge_areas && selectedKnowledge.knowledge_areas.length > 0 && (
+                <div className="mt-2">
+                  <strong>Áreas asignadas:</strong>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {selectedKnowledge.knowledge_areas.map((ka: any) => (
+                      <span
+                        key={ka.area_id}
+                        className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium text-white"
+                        style={{ backgroundColor: ka.areas?.color || '#6B7280' }}
+                      >
+                        {ka.areas?.name || 'Área sin nombre'}
+                      </span>
+                    ))}
+          </div>
+        </div>
+      )}
             </div>
 
             {selectedKnowledge.notes && (
@@ -1456,7 +2923,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
             <div className="flex justify-end space-x-3 mt-6">
               <button
                 onClick={() => {
-                  setShowViewContent(false);
+                  setShowViewKnowledge(false);
                   setSelectedKnowledge(null);
                 }}
                 className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
@@ -1466,7 +2933,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(selectedKnowledge.content);
-                  alert('Contenido copiado al portapapeles');
+                  showNotification('Contenido copiado al portapapeles', 'success');
                 }}
                 className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600"
               >
@@ -1477,159 +2944,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {/* Modal: Multi Upload */}
-      {showMultiUpload && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">📎 Subida Múltiple de Archivos</h3>
-            
-            {multiFiles.length === 0 ? (
-              <div className="text-center py-8">
-                <div className="text-gray-400 text-6xl mb-4">📎</div>
-                <p className="text-gray-500 mb-4">
-                  No hay archivos seleccionados. Arrastra archivos o usa el botón de selección.
-                </p>
-                <label className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg font-medium cursor-pointer">
-                  Seleccionar Archivos
-                  <input
-                    type="file"
-                    multiple
-                    accept=".txt,.docx,.pdf"
-                    onChange={handleFileInputChange}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-            ) : (
-              <div>
-                <div className="mb-4 text-sm text-gray-600">
-                  {multiFiles.length} {multiFiles.length === 1 ? 'archivo seleccionado' : 'archivos seleccionados'}
-                </div>
-                
-                <div className="space-y-4 max-h-96 overflow-y-auto">
-                  {multiFiles.map((fileData, index) => {
-                    const status = uploadProgress[index] || 'pending';
-                    const statusIcons = {
-                      pending: '⏳',
-                      uploading: '🔄',
-                      success: '✅',
-                      error: '❌'
-                    };
-                    const statusColors = {
-                      pending: 'border-gray-300 bg-white',
-                      uploading: 'border-blue-300 bg-blue-50',
-                      success: 'border-green-300 bg-green-50',
-                      error: 'border-red-300 bg-red-50'
-                    };
-
-                    return (
-                      <div key={index} className={`border rounded-lg p-4 ${statusColors[status]}`}>
-                        <div className="flex items-start space-x-3">
-                          <div className="text-2xl">{statusIcons[status]}</div>
-                          <div className="flex-1 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <div className="font-medium text-gray-900">
-                                  📄 {fileData.file.name}
-                                </div>
-                                <div className="text-xs text-gray-500">
-                                  {(fileData.file.size / 1024 / 1024).toFixed(2)} MB
-                                </div>
-                              </div>
-                              {status === 'pending' && (
-                                <button
-                                  onClick={() => removeFile(index)}
-                                  className="text-red-500 hover:text-red-700 text-sm"
-                                >
-                                  ✕ Remover
-                                </button>
-                              )}
-                            </div>
-
-                            {status === 'pending' && (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div>
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">
-                                    Título personalizado
-                                  </label>
-                                                                     <input
-                                     type="text"
-                                     value={fileData.title}
-                                     onChange={(e) => updateFileTitle(index, e.target.value)}
-                                     className="w-full px-2 py-1 border border-gray-300 rounded text-sm text-gray-900 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                                     placeholder="Deja vacío para usar nombre del archivo"
-                                   />
-                                </div>
-                                <div>
-                                  <label className="block text-xs font-medium text-gray-700 mb-1">
-                                    Asignar a área
-                                  </label>
-                                                                     <select
-                                     value={fileData.areaId}
-                                     onChange={(e) => updateFileArea(index, e.target.value)}
-                                     className="w-full px-2 py-1 border border-gray-300 rounded text-sm text-gray-900 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                                   >
-                                    <option value="">Sin asignar</option>
-                                    {areas.map((area) => (
-                                      <option key={area.id} value={area.id}>
-                                        {area.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
-                            )}
-
-                            {status === 'error' && (
-                              <div className="text-red-600 text-sm">
-                                Error al subir el archivo. Inténtalo de nuevo.
-                              </div>
-                            )}
-
-                            {status === 'success' && (
-                              <div className="text-green-600 text-sm">
-                                ✅ Archivo subido exitosamente
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="flex justify-between items-center mt-6">
-                  <div className="text-sm text-gray-600">
-                    {Object.values(uploadProgress).filter(status => status === 'success').length} / {multiFiles.length} completados
-                  </div>
-                  <div className="flex space-x-3">
-                    <button
-                      onClick={() => {
-                        setShowMultiUpload(false);
-                        setMultiFiles([]);
-                        setUploadProgress({});
-                      }}
-                      disabled={isMultiUploading}
-                      className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      onClick={handleMultiUpload}
-                      disabled={multiFiles.length === 0 || isMultiUploading}
-                      className="px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 disabled:opacity-50"
-                    >
-                      {isMultiUploading ? 'Subiendo...' : `Subir ${multiFiles.length} ${multiFiles.length === 1 ? 'archivo' : 'archivos'}`}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Notificaciones Toast */}
+      {/* Notifications Toast */}
       <div className="fixed top-4 right-4 z-50 space-y-3">
         {notifications.map((notification) => (
           <div
@@ -1684,8 +2999,6 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
           </div>
         ))}
       </div>
-
-
     </div>
   );
 } 
